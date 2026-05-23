@@ -117,8 +117,9 @@ You MUST respond ONLY with a single JSON object conforming exactly to this schem
 Rules:
 1. If the user asks you to open a website, search YouTube, or do any action matching a tool, select the appropriate tool and set "tool_name" and "tool_args" accordingly.
 2. If NO tool is required, set "tool_name" to null and "tool_args" to {{}}. Use the "thought" field to write your conversational response to the user.
-3. NEVER wrap your final output in anything other than the raw JSON object. Do not add conversational text outside the JSON.
-4. Double check that the arguments you provide in "tool_args" exactly match the parameter schema of the tool.
+3. When a tool execution result is provided in the conversation history, do NOT call the tool again. Set "tool_name" to null and "tool_args" to {{}} and write a friendly response in the "thought" field confirming that the action was successfully executed (e.g. "I've successfully opened the website!" or "I've started playing that video on YouTube for you!").
+4. NEVER wrap your final output in anything other than the raw JSON object. Do not add conversational text outside the JSON.
+5. Double check that the arguments you provide in "tool_args" exactly match the parameter schema of the tool.
 
 Available Tools:
 {tools_formatted}

@@ -20,3 +20,5 @@ class Settings:
     # Browser automation configurations
     BROWSER_HEADLESS: bool = os.getenv("BROWSER_HEADLESS", "False").lower() in ("true", "1", "yes")
     BROWSER_TIMEOUT: int = int(os.getenv("BROWSER_TIMEOUT", "15000"))
+    BROWSER_CONNECT_CDP: bool = os.getenv("BROWSER_CONNECT_CDP", "False").lower() in ("true", "1", "yes")
+    BROWSER_CDP_URL: str = os.getenv("BROWSER_CDP_URL", "http://127.0.0.1:9222")

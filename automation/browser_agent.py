@@ -1,4 +1,5 @@
 import time
+# pyrefly: ignore [missing-import]
 from playwright.sync_api import sync_playwright, Browser, Page, Playwright
 from config.settings import Settings
 from utils.logger import logger
@@ -14,20 +15,74 @@ class BrowserAgent:
         self.timeout = Settings.BROWSER_TIMEOUT
         
     def start(self):
-        """Starts the Playwright driver and launches a headed/headless Chromium browser."""
+        """Starts the Playwright driver and launches a new browser or connects to an existing CDP session."""
         if not self.browser:
-            logger.info("Initializing Playwright Chromium browser session...")
             self.playwright = sync_playwright().start()
-            self.browser = self.playwright.chromium.launch(
-                headless=self.headless,
-                args=["--disable-blink-features=AutomationControlled"]
-            )
-            # Create a clean context with standard viewport size
-            context = self.browser.new_context(
-                viewport={"width": 1280, "height": 720}
-            )
-            self.page = context.new_page()
-            self.page.set_default_timeout(self.timeout)
+            
+            if Settings.BROWSER_CONNECT_CDP:
+                ws_url = self._get_ws_url(Settings.BROWSER_CDP_URL)
+                logger.info(f"Connecting to existing browser session over CDP at {ws_url}...")
+                try:
+                    self.browser = self.playwright.chromium.connect_over_cdp(ws_url)
+                    # Find first available context and page, or create one
+                    if self.browser.contexts:
+                        context = self.browser.contexts[0]
+                        self.page = context.pages[0] if context.pages else context.new_page()
+                    else:
+                        self.page = self.browser.new_page()
+                    self.page.set_default_timeout(self.timeout)
+                    logger.info("Successfully connected to existing CDP browser session.")
+                except Exception as e:
+                    logger.error(f"Failed to connect to CDP session: {e}. Falling back to launching a new Chromium instance...")
+                    self._launch_new_browser()
+            else:
+                self._launch_new_browser()
+
+    def _get_ws_url(self, cdp_url: str) -> str:
+        """Dynamically queries the CDP targets list to resolve the exact WebSocket Debugger URL."""
+        import urllib.request
+        import json
+        
+        if cdp_url.startswith(("ws://", "wss://")):
+            return cdp_url
+            
+        try:
+            base_url = cdp_url.rstrip('/')
+            json_url = f"{base_url}/json"
+            
+            req = urllib.request.Request(json_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=3.0) as response:
+                data = json.loads(response.read().decode())
+                
+                # Check for "browser" debugger target
+                for target in data:
+                    if target.get("type") == "browser" and "webSocketDebuggerUrl" in target:
+                        return target["webSocketDebuggerUrl"]
+                
+                # Fallback to any active target debugger
+                for target in data:
+                    if "webSocketDebuggerUrl" in target:
+                        return target["webSocketDebuggerUrl"]
+        except Exception as e:
+            logger.debug(f"Could not resolve WS url dynamically: {e}")
+            
+        # Fallback constructor for standard Firefox/Zen CDP websocket endpoints
+        ws_base = cdp_url.replace("http://", "ws://").replace("https://", "wss://")
+        return ws_base.rstrip('/')
+                
+    def _launch_new_browser(self):
+        """Launches a brand new local Chromium instance."""
+        logger.info("Initializing new Playwright Chromium browser session...")
+        self.browser = self.playwright.chromium.launch(
+            headless=self.headless,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        # Create a clean context with standard viewport size
+        context = self.browser.new_context(
+            viewport={"width": 1280, "height": 720}
+        )
+        self.page = context.new_page()
+        self.page.set_default_timeout(self.timeout)
             
     def navigate(self, url: str) -> str:
         """Navigates the browser to the specified URL, handles cookie dialogues, and returns status."""
