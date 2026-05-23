@@ -16,3 +16,7 @@ class Settings:
     
     # System settings
     SYSTEM_NAME: str = "Jarvboi"
+    
+    # Browser automation configurations
+    BROWSER_HEADLESS: bool = os.getenv("BROWSER_HEADLESS", "False").lower() in ("true", "1", "yes")
+    BROWSER_TIMEOUT: int = int(os.getenv("BROWSER_TIMEOUT", "15000"))

@@ -3,6 +3,10 @@ import sys
 # Add current directory to path to ensure local module imports work
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Safely reconfigure standard output streams to handle unencodable characters (e.g. emojis on CP1252 terminals)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(errors='replace')
+
 from core.assistant import Assistant
 from utils.logger import logger
 
