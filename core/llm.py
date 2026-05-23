@@ -35,6 +35,7 @@ class OllamaLLM:
                 response = ollama.chat(
                     model=self.model,
                     messages=messages,
+                    format="json",
                     options={
                         "temperature": self.temperature
                     }

@@ -4,7 +4,7 @@ from utils.logger import logger
 
 @register_tool(
     name="system_media_play_pause",
-    description="Sends a system-wide multimedia Play/Pause keyboard key event. Natively pauses or resumes any active audio/video playback (such as YouTube videos, Spotify, or media players) globally on Windows.",
+    description="Sends a system-wide multimedia Play/Pause keyboard key event. You MUST ALWAYS call this tool whenever the user asks to pause, play, resume, stop, unpause, or control music/audio/video playback. You cannot control media conversationally; calling this tool is the ONLY physical way to execute the user's playback request.",
     parameters={
         "type": "object",
         "properties": {},
