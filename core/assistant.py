@@ -1,17 +1,28 @@
 import json
 from typing import Generator
-from core.llm import OllamaLLM
+from core.llm import OllamaLLM, GeminiLLM
 from core.memory import ConversationMemory
 from tools.registry import registry, ToolRegistry
+from config.settings import Settings
 from utils.logger import logger
 
 class Assistant:
     """The core coordinator of the Jarvboi assistant."""
     
-    def __init__(self, memory: ConversationMemory = None, llm: OllamaLLM = None, tool_registry: ToolRegistry = None):
+    def __init__(self, memory: ConversationMemory = None, llm=None, tool_registry: ToolRegistry = None):
         self.memory = memory or ConversationMemory()
-        self.llm = llm or OllamaLLM()
         self.registry = tool_registry or registry
+        
+        # Dynamically select LLM wrapper based on configurations
+        if llm:
+            self.llm = llm
+        else:
+            if Settings.LLM_PROVIDER == "gemini" and Settings.GEMINI_API_KEY:
+                logger.info("Initializing Gemini 2.5 Flash API as primary LLM provider...")
+                self.llm = GeminiLLM()
+            else:
+                logger.info("Initializing local Ollama as fallback LLM provider...")
+                self.llm = OllamaLLM()
         
     def execute(self, user_message: str, max_turns: int = 3) -> Generator[dict, None, None]:
         """Processes a user message, executing tools dynamically and yielding step details.
@@ -33,6 +44,8 @@ class Assistant:
             response = self.llm.chat(messages)
             thought = response.get("thought", "")
             tool_name = response.get("tool_name")
+            if tool_name in (None, "", "null", "None"):
+                tool_name = None
             tool_args = response.get("tool_args", {})
             
             yield {
@@ -53,6 +66,10 @@ class Assistant:
                         "tool_args": tool_args
                     }
                     
+                    # Add the assistant's pre-tool thought to memory so the LLM remembers what it said/did
+                    if thought:
+                        self.memory.add_message("assistant", thought)
+                        
                     # Execute tool
                     result = tool.execute(**tool_args)
                     logger.info(f"Tool '{tool_name}' execution result: {result}")
@@ -71,6 +88,8 @@ class Assistant:
                 else:
                     error_msg = f"Tool '{tool_name}' is not registered."
                     logger.warning(error_msg)
+                    if thought:
+                        self.memory.add_message("assistant", thought)
                     self.memory.add_tool_result(tool_name, error_msg)
                     
                     yield {
@@ -82,7 +101,7 @@ class Assistant:
             
             # 5. Direct Conversational Response (No tool call)
             # Add LLM response to memory and complete flow
-            self.memory.add_message("assistant", json.dumps(response))
+            self.memory.add_message("assistant", thought)
             yield {
                 "type": "final_response",
                 "response": thought
@@ -101,8 +120,12 @@ class Assistant:
         tools_list = self.registry.list_tools()
         tools_formatted = json.dumps(tools_list, indent=2)
         
-        return f"""You are Jarvboi, a highly capable modular personal AI assistant.
-You operate using structured tool execution.
+        return f"""You are Jarvboi, a highly capable modular personal AI assistant running natively on the user's Windows computer.
+You can control the user's laptop using the provided python automation tools.
+
+Crucial Lifecycle:
+1. First Turn: When the user asks you to pause/play music, open a website, or play a video on YouTube, you MUST call the appropriate tool. Do NOT confirm completion yet. Set "tool_name" to the tool and let the python backend execute it.
+2. Second Turn: Once the tool execution result is returned in the conversation history, then and ONLY then confirm the execution succeeded. Speak proudly as a physical desktop operating agent (e.g. "I've successfully paused your music!" or "I've started playing that video on YouTube for you!"). Never say "I am a text-based AI model" or "I cannot control your device" because the python backend has already executed the tools successfully on your behalf.
 
 CRITICAL INSTRUCTION:
 You MUST respond ONLY with a single JSON object containing exactly three keys: "thought", "tool_name", and "tool_args". Do NOT nest your response inside other keys (like "conversation" or "role").
@@ -117,7 +140,7 @@ Rules:
 1. If the user asks you to open a website, search YouTube, or perform any action matching an available tool, select the appropriate tool and set "tool_name" and "tool_args" accordingly.
 2. If the user asks to "pause", "play", "resume", "stop", "unpause", or control any music, media, video, or audio playback, you MUST call the "system_media_play_pause" tool. Set "tool_name" to "system_media_play_pause" and "tool_args" to {{}}.
 3. If NO tool is required, set "tool_name" to null and "tool_args" to {{}}. Use the "thought" field to write your conversational response to the user.
-4. When a tool execution result is provided in the conversation history, do NOT call the tool again. Set "tool_name" to null and "tool_args" to {{}} and write a friendly response in the "thought" field confirming that the action was successfully executed (e.g. "I've successfully opened the website!" or "I've started playing that video on YouTube for you!").
+4. When a tool execution result is provided in the conversation history, do NOT call the tool again. Set "tool_name" to null and "tool_args" to {{}} and write a friendly response in the "thought" field confirming that the action was successfully executed (e.g. "I've successfully opened the website!" or "I've started playing that video on YouTube for you!"). Never say you cannot execute it.
 5. NEVER wrap your final output in anything other than the raw JSON object. Do not add conversational text outside the JSON.
 6. Double check that the arguments you provide in "tool_args" exactly match the parameter schema of the tool.
 
