@@ -55,9 +55,13 @@ class GeminiLLM:
                         "tool_args": {
                             "type": "OBJECT",
                             "description": "Arguments to pass to the tool. Must exactly match the tool's parameter schema. Empty object if tool_name is null."
+                        },
+                        "response": {
+                            "type": "STRING",
+                            "description": "The conversational text to say to the user. This should be empty if you are calling a tool."
                         }
                     },
-                    "required": ["thought", "tool_name", "tool_args"]
+                    "required": ["thought", "tool_name", "tool_args", "response"]
                 }
             }
         }
@@ -167,6 +171,9 @@ class OllamaLLM:
                     parsed_response["tool_name"] = None
                 if "tool_args" not in parsed_response:
                     parsed_response["tool_args"] = {}
+                if "response" not in parsed_response:
+                    # Fallback if the model put the response in the thought
+                    parsed_response["response"] = parsed_response["thought"] if not parsed_response["tool_name"] else ""
                     
                 return parsed_response
                 

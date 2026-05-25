@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JARVBOI Interface</title>
+    <link rel="stylesheet" href="./style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="app">
+      
+      <!-- Top HUD Header -->
+      <header class="hud-header">
+        <div class="hud-title">
+          <h1>JARVBOI</h1>
+          <span class="version">v1.0.0</span>
+        </div>
+        <div class="system-status">
+          <div class="status-indicator"></div>
+          <span id="connection-status">Connecting...</span>
+        </div>
+      </header>
+
+      <!-- Main Layout -->
+      <main class="hud-main">
+        
+        <!-- Left Panel: Chat & Logs -->
+        <section class="panel chat-panel glass">
+          <div class="panel-header">
+            <h2>COMMUNICATION LINK</h2>
+          </div>
+          <div id="chat-history" class="chat-history scrollable">
+            <div class="message system">System initialized. Waiting for input...</div>
+          </div>
+          <form id="chat-form" class="chat-input-area">
+            <input type="text" id="chat-input" placeholder="Enter command..." autocomplete="off" />
+            <button type="submit" id="send-btn">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
+          </form>
+        </section>
+
+        <!-- Center: AI Core / Orb -->
+        <section class="core-section">
+          <div class="ai-orb-container">
+            <div class="ai-orb" id="ai-orb">
+              <div class="orb-ring ring-1"></div>
+              <div class="orb-ring ring-2"></div>
+              <div class="orb-ring ring-3"></div>
+              <div class="orb-core"></div>
+            </div>
+            <div class="orb-status-text" id="orb-status-text">IDLE</div>
+          </div>
+        </section>
+
+        <!-- Right Panel: Thoughts & Diagnostics -->
+        <section class="panel diagnostic-panel glass">
+          <div class="panel-header">
+            <h2>INTERNAL DIAGNOSTICS</h2>
+          </div>
+          <div id="diagnostic-log" class="diagnostic-log scrollable">
+            <!-- Thoughts and tool actions will appear here -->
+          </div>
+        </section>
+
+      </main>
+
+      <!-- Background Elements for Aesthetics -->
+      <div class="background-grid"></div>
+      <div class="background-glow"></div>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

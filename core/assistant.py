@@ -101,10 +101,11 @@ class Assistant:
             
             # 5. Direct Conversational Response (No tool call)
             # Add LLM response to memory and complete flow
-            self.memory.add_message("assistant", thought)
+            response_text = response.get("response", thought) # Fallback to thought if response is missing
+            self.memory.add_message("assistant", response_text)
             yield {
                 "type": "final_response",
-                "response": thought
+                "response": response_text
             }
             break
         else:
@@ -128,19 +129,20 @@ Crucial Lifecycle:
 2. Second Turn: Once the tool execution result is returned in the conversation history, then and ONLY then confirm the execution succeeded. Speak proudly as a physical desktop operating agent (e.g. "I've successfully paused your music!" or "I've started playing that video on YouTube for you!"). Never say "I am a text-based AI model" or "I cannot control your device" because the python backend has already executed the tools successfully on your behalf.
 
 CRITICAL INSTRUCTION:
-You MUST respond ONLY with a single JSON object containing exactly three keys: "thought", "tool_name", and "tool_args". Do NOT nest your response inside other keys (like "conversation" or "role").
+You MUST respond ONLY with a single JSON object containing exactly four keys: "thought", "tool_name", "tool_args", and "response". Do NOT nest your response inside other keys (like "conversation" or "role").
 Your output MUST conform exactly to this schema:
 {{
-  "thought": "Direct response to user OR detailed rationale explaining which tool you are calling and why.",
+  "thought": "Internal reasoning explaining which tool you are calling and why, or why no tool is needed.",
   "tool_name": "name_of_the_tool_to_execute" or null,
-  "tool_args": {{}}
+  "tool_args": {{}},
+  "response": "The actual text you want to say to the user. This should be empty if you are calling a tool."
 }}
 
 Rules:
 1. If the user asks you to open a website, search YouTube, or perform any action matching an available tool, select the appropriate tool and set "tool_name" and "tool_args" accordingly.
 2. If the user asks to "pause", "play", "resume", "stop", "unpause", or control any music, media, video, or audio playback, you MUST call the "system_media_play_pause" tool. Set "tool_name" to "system_media_play_pause" and "tool_args" to {{}}.
-3. If NO tool is required, set "tool_name" to null and "tool_args" to {{}}. Use the "thought" field to write your conversational response to the user.
-4. When a tool execution result is provided in the conversation history, do NOT call the tool again. Set "tool_name" to null and "tool_args" to {{}} and write a friendly response in the "thought" field confirming that the action was successfully executed (e.g. "I've successfully opened the website!" or "I've started playing that video on YouTube for you!"). Never say you cannot execute it.
+3. If NO tool is required, set "tool_name" to null and "tool_args" to {{}}. Write your internal reasoning in "thought", and write your conversational reply to the user in "response".
+4. When a tool execution result is provided in the conversation history, do NOT call the tool again. Set "tool_name" to null and "tool_args" to {{}} and write a friendly response in the "response" field confirming that the action was successfully executed (e.g. "I've successfully opened the website!" or "I've started playing that video on YouTube for you!"). Never say you cannot execute it.
 5. NEVER wrap your final output in anything other than the raw JSON object. Do not add conversational text outside the JSON.
 6. Double check that the arguments you provide in "tool_args" exactly match the parameter schema of the tool.
 
