@@ -1,1 +1,30 @@
-__pycache__/*
+# Python Cache & Envs
+__pycache__/
+core/__pycache__/
+tools/__pycache__/
+utils/__pycache__/
+config/__pycache__/
+speech/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.env
+
+# Logs & Diagnostics
+*.log
+jarvboi.log
+
+# Node & Build Systems
+node_modules/
+ui/node_modules/
+ui/dist/
+dist/
+out/
+release/
+.vite/
+.eslintcache
+
+# System Files
+.DS_Store
+Thumbs.db

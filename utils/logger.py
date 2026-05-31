@@ -2,6 +2,18 @@ import logging
 import sys
 from config.settings import Settings
 
+# Ensure standard output streams on Windows gracefully handle emojis/non-ASCII without crashing
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(errors='replace')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(errors='replace')
+    except Exception:
+        pass
+
 def setup_logger() -> logging.Logger:
     """Configures and returns the application logger."""
     logger = logging.getLogger(Settings.SYSTEM_NAME)

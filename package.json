@@ -1,0 +1,21 @@
+{
+  "name": "jarvboi-desktop",
+  "version": "1.0.0",
+  "description": "Desktop background wrapper for Jarvis AI Assistant",
+  "main": "electron-main.js",
+  "scripts": {
+    "start": "electron .",
+    "ui-dev": "npm --prefix ui run dev",
+    "ui-build": "npm --prefix ui run build"
+  },
+  "keywords": [
+    "jarvis",
+    "electron",
+    "assistant"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.7.7"
+  }
+}

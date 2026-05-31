@@ -53,7 +53,7 @@ def listen_mic(timeout: int = 5, phrase_time_limit: int = 8, calibrate: bool = F
         
     try:
         with microphone as source:
-            logger.info("🎙️ Listening...")
+            logger.info("[Mic] Listening...")
             print("\n[Listening... Speak now]", flush=True)
             
             audio = recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)

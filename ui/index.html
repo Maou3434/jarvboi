@@ -17,9 +17,20 @@
           <h1>JARVBOI</h1>
           <span class="version">v1.0.0</span>
         </div>
-        <div class="system-status">
-          <div class="status-indicator"></div>
-          <span id="connection-status">Connecting...</span>
+        <div class="header-right">
+          <div class="system-status">
+            <div class="status-indicator"></div>
+            <span id="connection-status">Connecting...</span>
+          </div>
+          <!-- Custom Window Controls for Electron -->
+          <div class="window-controls" id="window-controls" style="display: none;">
+            <button class="win-btn" id="win-min" title="Minimize">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <button class="win-btn close" id="win-close" title="Close to Tray">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </div>
         </div>
       </header>
 

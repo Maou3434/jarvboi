@@ -2,10 +2,18 @@ import os
 import sys
 import json
 import asyncio
+import threading
+import time
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+
+# For activation sound alerts on Windows
+try:
+    import winsound
+except ImportError:
+    winsound = None
 
 # Ensure local module imports work
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -18,18 +26,21 @@ app = FastAPI(title="JARVBOI API")
 # Enable CORS for the frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize Assistant (we keep a single instance for context memory)
+# Global instances and event loop references
+assistant = None
+active_connections = set()
+main_loop = None
+
 try:
     assistant = Assistant()
 except Exception as e:
     logger.exception(f"Failed to initialize assistant: {e}")
-    assistant = None
 
 class ChatRequest(BaseModel):
     message: str
@@ -44,7 +55,6 @@ def get_status():
 def chat_endpoint(request: ChatRequest):
     """
     HTTP endpoint for basic chat (non-streaming).
-    Useful if WebSockets are not used.
     """
     if not assistant:
         return {"error": "Assistant not initialized"}
@@ -53,6 +63,113 @@ def chat_endpoint(request: ChatRequest):
     final_response = next((r.get("response") for r in responses if r.get("type") == "final_response"), "")
     
     return {"response": final_response, "steps": responses}
+
+# Helper to broadcast JSON messages thread-safely to all connected client UIs
+def broadcast_to_ui(data):
+    global main_loop
+    if main_loop and active_connections:
+        asyncio.run_coroutine_threadsafe(broadcast_all(data), main_loop)
+
+async def broadcast_all(data):
+    for ws in list(active_connections):
+        try:
+            await ws.send_json(data)
+        except Exception:
+            try:
+                active_connections.remove(ws)
+            except KeyError:
+                pass
+
+# Background Voice Thread Loop for Wake Word Activation
+def background_voice_loop():
+    global main_loop, assistant
+    logger.info("[Voice Server] Background wake-word listening loop started.")
+    
+    # Wait for the main asyncio loop to be ready
+    while main_loop is None:
+        time.sleep(0.5)
+
+    from speech import calibrate_mic, listen_mic, speak
+    
+    try:
+        calibrate_mic(duration=1.0)
+    except Exception as e:
+        logger.error(f"[Voice Server] Failed to calibrate mic: {e}")
+
+    if not assistant:
+        try:
+            assistant = Assistant()
+        except Exception as e:
+            logger.exception("[Voice Server] Failed to initialize Assistant in thread:")
+            return
+
+    logger.info("[Voice Server] Mic calibrated. Listening continuously for wake word ('Jarvis' / 'Jarvboi')...")
+    
+    while True:
+        try:
+            # 1. Listen for short phrases (energy threshold adjustment) to capture the wake word
+            phrase = listen_mic(timeout=3, phrase_time_limit=3)
+            if not phrase:
+                continue
+
+            clean_phrase = phrase.lower().strip()
+            # Recognize "jarvis" or "jarvboi"
+            if "jarvis" in clean_phrase or "jarvboi" in clean_phrase or "jarvis" in clean_phrase.replace(" ", ""):
+                logger.info(f"[Voice Server] Wake word detected: '{clean_phrase}'")
+                
+                # Play futuristic confirmation chime (2 short high-pitched beeps)
+                if winsound:
+                    try:
+                        winsound.Beep(1200, 80)
+                        winsound.Beep(1600, 100)
+                    except Exception:
+                        pass
+
+                # Notify UI of listening state
+                broadcast_to_ui({"type": "status", "status": "listening"})
+                broadcast_to_ui({"type": "system", "message": "🎙️ Jarvis Activated. Listening..."})
+
+                # 2. Listen for the actual command
+                command = listen_mic(timeout=8, phrase_time_limit=9)
+                if not command:
+                    logger.info("[Voice Server] No command detected after activation.")
+                    if winsound:
+                        try:
+                            winsound.Beep(800, 150)
+                        except Exception:
+                            pass
+                    broadcast_to_ui({"type": "status", "status": "idle"})
+                    broadcast_to_ui({"type": "system", "message": "Voice Activation: Timeout / No command detected."})
+                    continue
+
+                logger.info(f"[Voice Server] Spoken Command received: '{command}'")
+                
+                # Append command to chat history and start processing animation
+                broadcast_to_ui({"type": "voice_command", "message": command})
+                broadcast_to_ui({"type": "status", "status": "processing"})
+
+                # 3. Process spoken command through the assistant's modular logic
+                final_response = ""
+                try:
+                    for step in assistant.execute(command):
+                        # Broadcast thoughts, tools, results, and responses
+                        broadcast_to_ui(step)
+                        if step.get("type") == "final_response":
+                            final_response = step.get("response", "")
+                except Exception as e:
+                    logger.exception("[Voice Server] Assistant execution failed:")
+                    broadcast_to_ui({"type": "error", "message": f"Voice Pipeline Error: {e}"})
+
+                # 4. Speak response vocally
+                if final_response:
+                    speak(final_response)
+
+                # Reset state back to idle
+                broadcast_to_ui({"type": "status", "status": "idle"})
+                
+        except Exception as e:
+            logger.exception("[Voice Server] Error in voice detection cycle:")
+            time.sleep(1)
 
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
@@ -65,12 +182,14 @@ async def websocket_chat(websocket: WebSocket):
         await websocket.close()
         return
 
+    active_connections.add(websocket)
+    logger.info(f"WebSocket client connected. Active clients: {len(active_connections)}")
+    
     try:
         while True:
             data = await websocket.receive_text()
             
             try:
-                # Expecting JSON or plain text
                 payload = json.loads(data)
                 user_message = payload.get("message", "")
             except json.JSONDecodeError:
@@ -87,19 +206,12 @@ async def websocket_chat(websocket: WebSocket):
                 })
                 continue
 
-            # We must run the synchronous assistant.execute generator
-            # For better async compatibility, ideally we'd run this in a threadpool, 
-            # but for now we iterate over it directly. If it blocks the event loop, 
-            # we should use run_in_executor. Since it's a local bot, it's acceptable for now.
-            
-            # Send an acknowledgement
             await websocket.send_json({"type": "status", "status": "processing"})
             
             try:
                 for step in assistant.execute(user_message):
-                    # step is a dictionary yielded by the assistant
+                    # Send execution steps to this websocket client
                     await websocket.send_json(step)
-                    # Yield control to the event loop so messages send immediately
                     await asyncio.sleep(0.01)
                     
             except Exception as e:
@@ -112,6 +224,20 @@ async def websocket_chat(websocket: WebSocket):
         logger.info("WebSocket disconnected")
     except Exception as e:
         logger.exception("WebSocket error")
+    finally:
+        try:
+            active_connections.remove(websocket)
+        except KeyError:
+            pass
+        logger.info(f"WebSocket client disconnected. Active clients: {len(active_connections)}")
+
+@app.on_event("startup")
+async def startup_event():
+    global main_loop
+    main_loop = asyncio.get_running_loop()
+    # Launch background thread for voice activation sidecar
+    voice_thread = threading.Thread(target=background_voice_loop, daemon=True)
+    voice_thread.start()
 
 if __name__ == "__main__":
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=False)

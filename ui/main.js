@@ -47,9 +47,13 @@ function handleIncomingData(data) {
   if (type === 'status') {
     if (data.status === 'processing') {
       setOrbState('processing');
+    } else if (data.status === 'listening') {
+      setOrbState('listening');
     } else if (data.status === 'idle') {
       setOrbState('idle');
     }
+  } else if (type === 'voice_command') {
+    appendChatMessage('USER (Voice)', data.message, 'user');
   } else if (type === 'thought') {
     appendLog('THOUGHT', data.thought, 'thought');
   } else if (type === 'tool_start') {
@@ -69,22 +73,26 @@ function handleIncomingData(data) {
 }
 
 function setOrbState(state) {
+  // Clear all dynamic state classes
+  aiOrb.classList.remove('processing', 'listening');
+  orbStatusText.classList.remove('processing', 'listening');
+  
   if (state === 'processing') {
     aiOrb.classList.add('processing');
     orbStatusText.textContent = 'PROCESSING...';
     orbStatusText.classList.add('processing');
+  } else if (state === 'listening') {
+    aiOrb.classList.add('listening');
+    orbStatusText.textContent = 'LISTENING...';
+    orbStatusText.classList.add('listening');
   } else {
-    aiOrb.classList.remove('processing');
     orbStatusText.textContent = 'IDLE';
-    orbStatusText.classList.remove('processing');
   }
 }
 
 function appendChatMessage(sender, text, role) {
   const msgDiv = document.createElement('div');
   msgDiv.className = `message ${role}`;
-  // Using innerHTML to allow some basic formatting, though textContent is safer.
-  // For JARVIS, we keep it simple text.
   msgDiv.textContent = text;
   
   chatHistory.appendChild(msgDiv);
@@ -119,3 +127,19 @@ chatForm.addEventListener('submit', (e) => {
 
 // Init
 connectWebSocket();
+
+// Electron Window Controls Setup
+if (window.electronAPI) {
+  const windowControls = document.getElementById('window-controls');
+  if (windowControls) {
+    windowControls.style.display = 'flex';
+  }
+  
+  document.getElementById('win-min')?.addEventListener('click', () => {
+    window.electronAPI.minimize();
+  });
+  
+  document.getElementById('win-close')?.addEventListener('click', () => {
+    window.electronAPI.close();
+  });
+}
