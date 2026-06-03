@@ -107,73 +107,96 @@ def background_voice_loop():
     
     while True:
         try:
-            # 1. Listen for short phrases (energy threshold adjustment) to capture the wake word
-            phrase = listen_mic(timeout=3, phrase_time_limit=3)
-            if not phrase:
-                continue
-
-            clean_phrase = phrase.lower().strip()
-            # Recognize "jarvis" or "jarvboi"
-            if "jarvis" in clean_phrase or "jarvboi" in clean_phrase or "jarvis" in clean_phrase.replace(" ", ""):
-                logger.info(f"[Voice Server] Wake word detected: '{clean_phrase}'")
+            # Check if assistant is awaiting confirmation, to bypass wake word
+            is_awaiting_confirm = False
+            if assistant and (assistant.awaiting_ollama_start or assistant.awaiting_gemini_switch):
+                is_awaiting_confirm = True
                 
-                # Play futuristic confirmation chime (2 short high-pitched beeps)
-                if winsound:
-                    try:
-                        winsound.Beep(1200, 80)
-                        winsound.Beep(1600, 100)
-                    except Exception:
-                        pass
-
-                # Notify UI of listening state
+            if is_awaiting_confirm:
+                logger.info("[Voice Server] Assistant is awaiting confirmation. Bypassing wake word.")
+                # Notify UI of listening state directly without wake-word chime (or play short beep)
                 broadcast_to_ui({"type": "status", "status": "listening"})
-                broadcast_to_ui({"type": "system", "message": "🎙️ Jarvis Activated. Listening..."})
-
-                # 2. Listen for the actual command
-                command = listen_mic(timeout=8, phrase_time_limit=9)
+                broadcast_to_ui({"type": "system", "message": "🎙️ Awaiting your reply..."})
+                
+                # Listen directly for the confirmation response
+                command = listen_mic(timeout=7, phrase_time_limit=6)
                 if not command:
-                    logger.info("[Voice Server] No command detected after activation.")
-                    if winsound:
-                        try:
-                            winsound.Beep(800, 150)
-                        except Exception:
-                            pass
+                    logger.info("[Voice Server] No confirmation reply detected. Clearing wait states.")
+                    assistant.awaiting_ollama_start = False
+                    assistant.awaiting_gemini_switch = False
                     broadcast_to_ui({"type": "status", "status": "idle"})
-                    broadcast_to_ui({"type": "system", "message": "Voice Activation: Timeout / No command detected."})
+                    broadcast_to_ui({"type": "system", "message": "Voice Confirmation: Timeout. Returning to idle."})
+                    continue
+            else:
+                # 1. Listen for short phrases (energy threshold adjustment) to capture the wake word
+                phrase = listen_mic(timeout=3, phrase_time_limit=3)
+                if not phrase:
                     continue
 
-                logger.info(f"[Voice Server] Spoken Command received: '{command}'")
-                
-                # Append command to chat history and start processing animation
-                broadcast_to_ui({"type": "voice_command", "message": command})
-                broadcast_to_ui({"type": "status", "status": "processing"})
-
-                # 3. Process spoken command through the assistant's modular logic
-                final_response = ""
-                try:
-                    for step in assistant.execute(command):
-                        # Broadcast thoughts, tools, results, and responses
-                        broadcast_to_ui(step)
-                        if step.get("type") == "final_response":
-                            final_response = step.get("response", "")
-                except Exception as e:
-                    logger.exception("[Voice Server] Assistant execution failed:")
-                    broadcast_to_ui({"type": "error", "message": f"Voice Pipeline Error: {e}"})
-
-                # 4. Speak response vocally
-                if final_response:
-                    # Notify UI that Jarvis is speaking
-                    broadcast_to_ui({"type": "status", "status": "speaking"})
-                    speak(final_response)
+                clean_phrase = phrase.lower().strip()
+                # Recognize "jarvis" or "jarvboi"
+                if "jarvis" in clean_phrase or "jarvboi" in clean_phrase or "jarvis" in clean_phrase.replace(" ", ""):
+                    logger.info(f"[Voice Server] Wake word detected: '{clean_phrase}'")
                     
-                    # Prevent microphone from recording the speaker playback by suspending capture
-                    word_count = len(final_response.split())
-                    speech_duration = max(2.0, (word_count / 2.5) + 0.8)
-                    logger.info(f"[Voice Server] Suspended mic listening for {speech_duration:.2f}s during speech output.")
-                    time.sleep(speech_duration)
+                    # Play futuristic confirmation chime (2 short high-pitched beeps)
+                    if winsound:
+                        try:
+                            winsound.Beep(1200, 80)
+                            winsound.Beep(1600, 100)
+                        except Exception:
+                            pass
 
-                # Reset state back to idle
-                broadcast_to_ui({"type": "status", "status": "idle"})
+                    # Notify UI of listening state
+                    broadcast_to_ui({"type": "status", "status": "listening"})
+                    broadcast_to_ui({"type": "system", "message": "🎙️ Jarvis Activated. Listening..."})
+
+                    # 2. Listen for the actual command
+                    command = listen_mic(timeout=8, phrase_time_limit=9)
+                    if not command:
+                        logger.info("[Voice Server] No command detected after activation.")
+                        if winsound:
+                            try:
+                                winsound.Beep(800, 150)
+                            except Exception:
+                                pass
+                        broadcast_to_ui({"type": "status", "status": "idle"})
+                        broadcast_to_ui({"type": "system", "message": "Voice Activation: Timeout / No command detected."})
+                        continue
+                else:
+                    continue
+
+            logger.info(f"[Voice Server] Spoken Command received: '{command}'")
+            
+            # Append command to chat history and start processing animation
+            broadcast_to_ui({"type": "voice_command", "message": command})
+            broadcast_to_ui({"type": "status", "status": "processing"})
+
+            # 3. Process spoken command through the assistant's modular logic
+            final_response = ""
+            try:
+                for step in assistant.execute(command):
+                    # Broadcast thoughts, tools, results, and responses
+                    broadcast_to_ui(step)
+                    if step.get("type") == "final_response":
+                        final_response = step.get("response", "")
+            except Exception as e:
+                logger.exception("[Voice Server] Assistant execution failed:")
+                broadcast_to_ui({"type": "error", "message": f"Voice Pipeline Error: {e}"})
+
+            # 4. Speak response vocally
+            if final_response:
+                # Notify UI that Jarvis is speaking
+                broadcast_to_ui({"type": "status", "status": "speaking"})
+                speak(final_response)
+                
+                # Prevent microphone from recording the speaker playback by suspending capture
+                word_count = len(final_response.split())
+                speech_duration = max(2.0, (word_count / 2.5) + 0.8)
+                logger.info(f"[Voice Server] Suspended mic listening for {speech_duration:.2f}s during speech output.")
+                time.sleep(speech_duration)
+
+            # Reset state back to idle
+            broadcast_to_ui({"type": "status", "status": "idle"})
                 
         except Exception as e:
             logger.exception("[Voice Server] Error in voice detection cycle:")

@@ -41,6 +41,10 @@ class Settings:
     # System settings
     SYSTEM_NAME: str = "Jarvboi"
     
+    # Speech-to-Text configurations
+    STT_BACKEND: str = os.getenv("STT_BACKEND", "whisper")  # 'whisper' or 'google'
+    WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "tiny.en")  # e.g. tiny.en, base.en, tiny, base
+    
     # Browser automation configurations
     BROWSER_HEADLESS: bool = os.getenv("BROWSER_HEADLESS", "False").lower() in ("true", "1", "yes")
     BROWSER_TIMEOUT: int = int(os.getenv("BROWSER_TIMEOUT", "15000"))

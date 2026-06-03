@@ -6,22 +6,44 @@ from tools.registry import registry, ToolRegistry
 from config.settings import Settings
 from utils.logger import logger
 
+def check_ollama_running() -> bool:
+    """Checks if the local Ollama server is running and responsive."""
+    try:
+        import urllib.request
+        # Settings.OLLAMA_HOST is typically "http://localhost:11434"
+        with urllib.request.urlopen(Settings.OLLAMA_HOST, timeout=1.5) as conn:
+            if conn.status in (200, 404):
+                return True
+    except Exception as e:
+        import urllib.error
+        if isinstance(e, urllib.error.HTTPError):
+            return True
+    return False
+
 class Assistant:
     """The core coordinator of the Jarvboi assistant."""
     
     def __init__(self, memory: ConversationMemory = None, llm=None, tool_registry: ToolRegistry = None):
         self.memory = memory or ConversationMemory()
         self.registry = tool_registry or registry
+        self.preferred_provider = Settings.LLM_PROVIDER
+        self.awaiting_ollama_start = False
+        self.awaiting_gemini_switch = False
+        self.has_gemini = bool(Settings.GEMINI_API_KEY)
         
         # Dynamically select LLM wrapper based on configurations
         if llm:
             self.llm = llm
         else:
-            if Settings.LLM_PROVIDER == "gemini" and Settings.GEMINI_API_KEY:
-                logger.info("Initializing Gemini 2.5 Flash API as primary LLM provider...")
-                self.llm = GeminiLLM()
+            if self.preferred_provider == "gemini":
+                if self.has_gemini:
+                    logger.info("Initializing Gemini 2.5 Flash API as primary LLM provider...")
+                    self.llm = GeminiLLM()
+                else:
+                    logger.warning("Gemini was selected as provider, but GEMINI_API_KEY is not configured. Falling back to local Ollama...")
+                    self.llm = OllamaLLM()
             else:
-                logger.info("Initializing local Ollama as fallback LLM provider...")
+                logger.info("Initializing local Ollama as LLM provider...")
                 self.llm = OllamaLLM()
         
     def execute(self, user_message: str, max_turns: int = 3) -> Generator[dict, None, None]:
@@ -30,6 +52,124 @@ class Assistant:
         Yields:
             Dict containing step information (type, thought, tool_name, result, response).
         """
+        clean_msg = user_message.lower().strip().replace(".", "").replace(",", "")
+        affirmative_words = {"yes", "yeah", "yup", "ok", "okay", "sure", "please", "do it", "confirm", "go ahead", "y", "correct", "affirmative"}
+        is_affirmative = any(w in affirmative_words for w in clean_msg.split()) or clean_msg in affirmative_words
+
+        # Handle active wait state for switching to Gemini
+        if self.awaiting_gemini_switch:
+            self.awaiting_gemini_switch = False
+            if is_affirmative:
+                self.llm = GeminiLLM()
+                self.preferred_provider = "gemini"
+                yield {
+                    "type": "thought",
+                    "thought": "User confirmed switching to Gemini API.",
+                    "tool_name": None,
+                    "tool_args": {}
+                }
+                yield {
+                    "type": "final_response",
+                    "response": "Certainly, sir. I have switched our LLM provider to Gemini. How can I assist you?"
+                }
+            else:
+                yield {
+                    "type": "thought",
+                    "thought": "User declined switching to Gemini. Remaining in Ollama mode.",
+                    "tool_name": None,
+                    "tool_args": {}
+                }
+                yield {
+                    "type": "final_response",
+                    "response": "Understood, sir. I will remain in Ollama mode and wait for the service to start."
+                }
+            return
+
+        # Handle active wait state for launching Ollama in WSL
+        if self.awaiting_ollama_start:
+            self.awaiting_ollama_start = False
+            
+            if is_affirmative:
+                yield {
+                    "type": "thought",
+                    "thought": "User confirmed starting Ollama in WSL. Triggering command...",
+                    "tool_name": None,
+                    "tool_args": {}
+                }
+                yield {
+                    "type": "final_response",
+                    "response": "Certainly, sir. Starting the Ollama service in WSL now. Please wait a moment while it initializes..."
+                }
+                
+                # Start Ollama in WSL
+                import subprocess
+                import time
+                try:
+                    subprocess.Popen(["wsl", "ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.info("[Ollama Manager] Executed background WSL startup command: wsl ollama serve")
+                except Exception as e:
+                    logger.error(f"[Ollama Manager] Failed to execute WSL command: {e}")
+                    
+                # Sleep to let the server spin up
+                time.sleep(4.0)
+                
+                # Re-verify connection
+                if check_ollama_running():
+                    logger.info("[Ollama Manager] Ollama is now running.")
+                    self.llm = OllamaLLM()
+                    yield {
+                        "type": "final_response",
+                        "response": "The Ollama service is now online in WSL and ready for use, sir. How can I assist you?"
+                    }
+                else:
+                    logger.warning("[Ollama Manager] Ollama failed to respond after WSL start command.")
+                    if self.has_gemini:
+                        self.awaiting_gemini_switch = True
+                        yield {
+                            "type": "final_response",
+                            "response": "I tried to start Ollama in WSL, sir, but the service is still not responding. Would you like me to switch to Gemini instead?"
+                        }
+                    else:
+                        yield {
+                            "type": "final_response",
+                            "response": "I tried to start Ollama in WSL, sir, but the service is still not responding. I will remain in Ollama mode and wait for it."
+                        }
+            else:
+                # User declined starting Ollama
+                if self.has_gemini:
+                    self.awaiting_gemini_switch = True
+                    yield {
+                        "type": "thought",
+                        "thought": "User declined starting Ollama. Asking if they want to switch to Gemini.",
+                        "tool_name": None,
+                        "tool_args": {}
+                    }
+                    yield {
+                        "type": "final_response",
+                        "response": "Understood, sir. Would you like me to switch to Gemini instead?"
+                    }
+                else:
+                    yield {
+                        "type": "final_response",
+                        "response": "Understood, sir. I will wait until the Ollama service becomes available."
+                    }
+            return
+                
+        # Intercept if local Ollama is preferred but currently offline
+        if self.preferred_provider == "ollama" and not check_ollama_running():
+            self.awaiting_ollama_start = True
+            yield {
+                "type": "thought",
+                "thought": "Ollama service is not running. Asking user for permission to start it in WSL.",
+                "tool_name": None,
+                "tool_args": {}
+            }
+            yield {
+                "type": "final_response",
+                "response": "I noticed the local Ollama service is not running, sir. Would you like me to start it in WSL?"
+            }
+            return
+
         # 1. Add user message to conversation memory
         self.memory.add_message("user", user_message)
         
