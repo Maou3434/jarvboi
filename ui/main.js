@@ -49,6 +49,8 @@ function handleIncomingData(data) {
       setOrbState('processing');
     } else if (data.status === 'listening') {
       setOrbState('listening');
+    } else if (data.status === 'speaking') {
+      setOrbState('speaking');
     } else if (data.status === 'idle') {
       setOrbState('idle');
     }
@@ -61,6 +63,10 @@ function handleIncomingData(data) {
     appendLog('TOOL EXEC', `Executing ${data.tool_name} with args: ${argsStr}`, 'tool-start');
   } else if (type === 'tool_end') {
     appendLog('TOOL RESULT', `Tool ${data.tool_name} finished.`, 'tool-end');
+  } else if (type === 'speak') {
+    appendLog('SPEAK', 'Streaming vocal response, sir.', 'speak-audio');
+    const audio = new Audio("data:audio/mp3;base64," + data.audio);
+    audio.play().catch(e => console.error('[Audio] Playback failed:', e));
   } else if (type === 'final_response') {
     appendChatMessage('JARVBOI', data.response, 'assistant');
     setOrbState('idle');
@@ -74,8 +80,8 @@ function handleIncomingData(data) {
 
 function setOrbState(state) {
   // Clear all dynamic state classes
-  aiOrb.classList.remove('processing', 'listening');
-  orbStatusText.classList.remove('processing', 'listening');
+  aiOrb.classList.remove('processing', 'listening', 'speaking');
+  orbStatusText.classList.remove('processing', 'listening', 'speaking');
   
   if (state === 'processing') {
     aiOrb.classList.add('processing');
@@ -85,6 +91,10 @@ function setOrbState(state) {
     aiOrb.classList.add('listening');
     orbStatusText.textContent = 'LISTENING...';
     orbStatusText.classList.add('listening');
+  } else if (state === 'speaking') {
+    aiOrb.classList.add('speaking');
+    orbStatusText.textContent = 'SPEAKING...';
+    orbStatusText.classList.add('speaking');
   } else {
     orbStatusText.textContent = 'IDLE';
   }

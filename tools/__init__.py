@@ -5,3 +5,5 @@ from tools.registry import registry, register_tool
 from tools.browser import *
 from tools.youtube import *
 from tools.system import *
+from tools.desktop import *
+

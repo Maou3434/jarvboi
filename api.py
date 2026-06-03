@@ -162,7 +162,15 @@ def background_voice_loop():
 
                 # 4. Speak response vocally
                 if final_response:
+                    # Notify UI that Jarvis is speaking
+                    broadcast_to_ui({"type": "status", "status": "speaking"})
                     speak(final_response)
+                    
+                    # Prevent microphone from recording the speaker playback by suspending capture
+                    word_count = len(final_response.split())
+                    speech_duration = max(2.0, (word_count / 2.5) + 0.8)
+                    logger.info(f"[Voice Server] Suspended mic listening for {speech_duration:.2f}s during speech output.")
+                    time.sleep(speech_duration)
 
                 # Reset state back to idle
                 broadcast_to_ui({"type": "status", "status": "idle"})
@@ -238,6 +246,31 @@ async def startup_event():
     # Launch background thread for voice activation sidecar
     voice_thread = threading.Thread(target=background_voice_loop, daemon=True)
     voice_thread.start()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("[FastAPI] Shutdown sequence initiated. Cleaning up active resources...")
+    # Close any active WebSocket connections
+    for ws in list(active_connections):
+        try:
+            await ws.close()
+        except Exception:
+            pass
+    active_connections.clear()
+    
+    # Clean up temporary scratch assets (temp images and audio)
+    try:
+        scratch_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scratch")
+        if os.path.exists(scratch_dir):
+            for f in os.listdir(scratch_dir):
+                if f.endswith((".mp3", ".png", ".jpg")):
+                    try:
+                        os.remove(os.path.join(scratch_dir, f))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    logger.info("[FastAPI] Clean shutdown completed successfully.")
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=False)
