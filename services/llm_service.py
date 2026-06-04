@@ -2,7 +2,7 @@ import re
 import json
 import urllib.request
 import ollama
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from config.settings import Settings
 from utils.logger import logger
 
@@ -17,8 +17,7 @@ class GeminiLLM:
     def chat(self, messages: List[Dict[str, str]], retries: int = 2) -> Dict[str, Any]:
         """Queries the Gemini API over direct HTTP request, enforcing structured JSON outputs."""
         if not self.api_key:
-            logger.error("GEMINI_API_KEY is not configured! Fallback to local Ollama...")
-            # Fallback inline or raise error
+            logger.error("GEMINI_API_KEY is not configured!")
             raise ValueError("GEMINI_API_KEY is missing.")
             
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
@@ -91,7 +90,6 @@ class GeminiLLM:
             except Exception as e:
                 logger.error(f"Error querying Gemini API (Attempt {attempt + 1}): {str(e)}")
                 if attempt == retries:
-                    # Final fallback to standard conversational response
                     return {
                         "thought": "I encountered an error querying the Gemini service: " + str(e),
                         "tool_name": None,
@@ -108,27 +106,20 @@ class OllamaLLM:
         self.host = Settings.OLLAMA_HOST
         self.temperature = Settings.LLM_TEMPERATURE
         
-        # Configure the ollama client host if custom
-        if self.host != "http://localhost:11434":
-            logger.debug(f"Ollama client initialized with host: {self.host}")
-            
     def _find_conversational_value(self, data) -> str:
         """Recursively search for standard conversational values within dictionary/list structures."""
         if isinstance(data, dict):
-            # Try specific conversational keys first
             for k in ["speech", "text", "Assistant", "assistant", "message", "thought", "response"]:
                 if k in data:
                     val = data[k]
                     if isinstance(val, str) and val.strip():
                         stripped = val.strip()
-                        # Verify this string is not itself nested JSON
                         if not (stripped.startswith("{") and stripped.endswith("}")):
                             return stripped
                     elif isinstance(val, (dict, list)):
                         res = self._find_conversational_value(val)
                         if res:
                             return res
-            # Fallback: recurse into all dict values
             for v in data.values():
                 res = self._find_conversational_value(v)
                 if res:
@@ -159,7 +150,6 @@ class OllamaLLM:
                 
                 parsed_response = self._clean_and_parse_json(content)
                 
-                # Validation and mapping of required fields using recursive conversational lookup
                 if "thought" not in parsed_response or not parsed_response["thought"]:
                     conversational_val = self._find_conversational_value(parsed_response)
                     if conversational_val:
@@ -172,7 +162,6 @@ class OllamaLLM:
                 if "tool_args" not in parsed_response:
                     parsed_response["tool_args"] = {}
                 if "response" not in parsed_response:
-                    # Fallback if the model put the response in the thought
                     parsed_response["response"] = parsed_response["thought"] if not parsed_response["tool_name"] else ""
                     
                 return parsed_response
@@ -193,22 +182,18 @@ class OllamaLLM:
         parsed_dict = None
         
         def find_conversational_value(data):
-            """Recursively search for standard conversational values within dictionary/list structures."""
             if isinstance(data, dict):
-                # Try specific conversational keys first
                 for k in ["speech", "text", "Assistant", "assistant", "message", "thought", "response"]:
                     if k in data:
                         val = data[k]
                         if isinstance(val, str) and val.strip():
                             stripped = val.strip()
-                            # Verify this string is not itself nested JSON
                             if not (stripped.startswith("{") and stripped.endswith("}")):
                                 return stripped
                         elif isinstance(val, (dict, list)):
                             res = find_conversational_value(val)
                             if res:
                                 return res
-                # Fallback: recurse into all dict values
                 for v in data.values():
                     res = find_conversational_value(v)
                     if res:
@@ -220,7 +205,6 @@ class OllamaLLM:
                         return res
             return None
 
-        # Scenario 1: JSON block within markdown code fence
         code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
         if code_block_match:
             try:
@@ -228,7 +212,6 @@ class OllamaLLM:
             except json.JSONDecodeError:
                 logger.warning("Found JSON in markdown code blocks, but failed to parse it.")
                 
-        # Scenario 2: Find outermost curly braces (standard JSON extraction)
         if not parsed_dict:
             first_brace = text.find('{')
             last_brace = text.rfind('}')
@@ -240,13 +223,11 @@ class OllamaLLM:
                     logger.warning(f"Extracted JSON substring but failed to parse: {jde}")
                     
         if parsed_dict:
-            # Robust mitigation: If the model nested a JSON string inside the "thought" field, unpack it
             if isinstance(parsed_dict.get("thought"), str):
                 thought_str = parsed_dict["thought"].strip()
                 if thought_str.startswith("{") and thought_str.endswith("}"):
                     unpacked = False
                     try:
-                        # Clean raw single-quote escapes which are invalid in JSON standards
                         clean_thought_str = thought_str.replace("\\'", "'")
                         nested_json = json.loads(clean_thought_str)
                         conversational_val = find_conversational_value(nested_json)
@@ -256,7 +237,6 @@ class OllamaLLM:
                     except Exception:
                         pass
                         
-                    # Regex fallback if JSON parsing fails due to escaping/formatting quirks
                     if not unpacked:
                         match = re.search(r'"(?:speech|text|Assistant|assistant|message|thought|response)"\s*:\s*"(.*?)"', thought_str, re.DOTALL)
                         if match:
@@ -264,10 +244,53 @@ class OllamaLLM:
                             parsed_dict["thought"] = clean_text
             return parsed_dict
             
-        # Scenario 3: Standard string (likely purely conversational fallback)
         logger.debug("No valid JSON structure found in output. Treating as raw conversational response.")
         return {
             "thought": text,
             "tool_name": None,
             "tool_args": {}
         }
+
+
+class LLMService:
+    """Central entrypoint for querying LLMs, managing Gemini and Ollama switching dynamically."""
+    
+    def __init__(self, provider: Optional[str] = None):
+        self.provider = provider or Settings.LLM_PROVIDER
+        self.has_gemini = bool(Settings.GEMINI_API_KEY)
+        self.active_llm = None
+        self.initialize_provider()
+        
+    def initialize_provider(self):
+        if self.provider == "gemini":
+            if self.has_gemini:
+                logger.info("[LLMService] Initializing Gemini 2.5 Flash API as active provider...")
+                self.active_llm = GeminiLLM()
+            else:
+                logger.warning("[LLMService] Gemini provider selected but API key missing. Falling back to local Ollama...")
+                self.active_llm = OllamaLLM()
+                self.provider = "ollama"
+        else:
+            logger.info("[LLMService] Initializing local Ollama as active provider...")
+            self.active_llm = OllamaLLM()
+            
+    def chat(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Routes chat query to the active LLM provider."""
+        return self.active_llm.chat(messages)
+        
+    def switch_to_gemini(self) -> bool:
+        """Dynamically switches active LLM provider to Gemini."""
+        if self.has_gemini:
+            self.active_llm = GeminiLLM()
+            self.provider = "gemini"
+            logger.info("[LLMService] Switched LLM provider to Gemini.")
+            return True
+        else:
+            logger.error("[LLMService] Cannot switch to Gemini: API key missing.")
+            return False
+            
+    def switch_to_ollama(self):
+        """Dynamically switches active LLM provider to Ollama."""
+        self.active_llm = OllamaLLM()
+        self.provider = "ollama"
+        logger.info("[LLMService] Switched LLM provider to Ollama.")
