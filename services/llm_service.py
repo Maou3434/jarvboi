@@ -97,6 +97,54 @@ class GeminiLLM:
                         "error": str(e)
                     }
 
+    def generate_json(self, messages: List[Dict[str, str]], response_schema: Optional[Dict[str, Any]] = None, retries: int = 2) -> Dict[str, Any]:
+        """Queries the Gemini API over direct HTTP request, enforcing a custom JSON schema or general JSON output."""
+        if not self.api_key:
+            logger.error("GEMINI_API_KEY is not configured!")
+            raise ValueError("GEMINI_API_KEY is missing.")
+            
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        
+        contents = []
+        for msg in messages:
+            role = "user"
+            if msg["role"] == "assistant":
+                role = "model"
+            contents.append({
+                "role": role,
+                "parts": [{"text": msg["content"]}]
+            })
+            
+        payload = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": self.temperature,
+                "responseMimeType": "application/json"
+            }
+        }
+        if response_schema:
+            payload["generationConfig"]["responseSchema"] = response_schema
+            
+        headers = {"Content-Type": "application/json"}
+        data = json.dumps(payload).encode("utf-8")
+        
+        for attempt in range(retries + 1):
+            try:
+                logger.debug(f"Querying Gemini API for JSON (Attempt {attempt + 1})...")
+                req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=12.0) as response:
+                    res_body = response.read().decode("utf-8")
+                    res_json = json.loads(res_body)
+                    candidates = res_json.get("candidates", [])
+                    if not candidates:
+                        raise ValueError("No generation candidates returned from Gemini.")
+                    content_text = candidates[0]["content"]["parts"][0]["text"].strip()
+                    return json.loads(content_text)
+            except Exception as e:
+                logger.error(f"Error in Gemini generate_json (Attempt {attempt + 1}): {str(e)}")
+                if attempt == retries:
+                    return {"error": str(e)}
+
 
 class OllamaLLM:
     """Wrapper class for communicating with local Ollama models."""
@@ -251,6 +299,26 @@ class OllamaLLM:
             "tool_args": {}
         }
 
+    def generate_json(self, messages: List[Dict[str, str]], response_schema: Optional[Dict[str, Any]] = None, retries: int = 2) -> Dict[str, Any]:
+        """Queries Ollama and extracts a generic JSON response."""
+        for attempt in range(retries + 1):
+            try:
+                logger.debug(f"Querying Ollama model '{self.model}' for JSON (Attempt {attempt + 1})...")
+                response = ollama.chat(
+                    model=self.model,
+                    messages=messages,
+                    format="json",
+                    options={
+                        "temperature": self.temperature
+                    }
+                )
+                content = response["message"]["content"].strip()
+                return self._clean_and_parse_json(content)
+            except Exception as e:
+                logger.error(f"Error in Ollama generate_json (Attempt {attempt + 1}): {str(e)}")
+                if attempt == retries:
+                    return {"error": str(e)}
+
 
 class LLMService:
     """Central entrypoint for querying LLMs, managing Gemini and Ollama switching dynamically."""
@@ -294,3 +362,7 @@ class LLMService:
         self.active_llm = OllamaLLM()
         self.provider = "ollama"
         logger.info("[LLMService] Switched LLM provider to Ollama.")
+
+    def generate_json(self, messages: List[Dict[str, str]], response_schema: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Routes generate_json query to the active LLM provider."""
+        return self.active_llm.generate_json(messages, response_schema)

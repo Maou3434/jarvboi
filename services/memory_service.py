@@ -234,25 +234,74 @@ class VectorStore:
 
 
 # --- Consolidated Memory Service ---
+from memory import (
+    ObsidianVault,
+    ImportanceScorer,
+    MemoryExtractor,
+    ObsidianLinker,
+    MemoryPromoter,
+    ObsidianIndexer,
+    ObsidianGraph,
+    ObsidianRetriever,
+    MemoryReflector
+)
+
 class MemoryService:
-    """Consolidated memory service managing short-term conversation logs and long-term vector DB.
-    
-    Utilizes a background thread worker queue to execute vector embeddings and save operations
-    in a non-blocking way relative to the conversational pipeline.
+    """Consolidated memory service managing short-term conversation logs (Working Memory)
+    and long-term Obsidian-based memory (Episodic, Semantic, Procedural).
     """
     
     def __init__(self, event_bus=None, filepath: Optional[str] = None, db_service=None):
         self.event_bus = event_bus
-        self.conversation_memory = ConversationMemory()
-        self.vector_store = VectorStore(filepath=filepath)
+        self.conversation_memory = ConversationMemory(max_messages=50)
         
-        # Lazy import of DbService
+        # Initialize LLM & DB service dependencies
+        from services.llm_service import LLMService
         from services.db_service import DbService
+        self.llm_service = LLMService()
         self.db_service = db_service or DbService()
         
+        # Initialize Obsidian V2 Memory System Components
+        self.vault = ObsidianVault()
+        self.scorer = ImportanceScorer()
+        self.extractor = MemoryExtractor(self.llm_service)
+        self.linker = ObsidianLinker()
+        self.promoter = MemoryPromoter(
+            vault=self.vault,
+            scorer=self.scorer,
+            extractor=self.extractor,
+            linker=self.linker,
+            llm_service=self.llm_service
+        )
+        self.indexer = ObsidianIndexer()
+        self.graph = ObsidianGraph()
+        self.retriever = ObsidianRetriever(
+            vault=self.vault,
+            indexer=self.indexer,
+            graph=self.graph
+        )
+        self.reflector = MemoryReflector(
+            vault=self.vault,
+            indexer=self.indexer,
+            graph=self.graph,
+            llm_service=self.llm_service
+        )
+        
+        # Rebuild graph and vector index upon startup
+        try:
+            logger.info("[MemoryService] Syncing graph and index with Obsidian Vault...")
+            self.graph.rebuild_graph(self.vault)
+            self.indexer.rebuild_index(self.vault)
+        except Exception as e:
+            logger.error(f"[MemoryService] Failed to rebuild index/graph on startup: {e}")
+            
         self.queue = queue.Queue()
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker_thread.start()
+        
+        # Background periodic reflection thread
+        self.reflection_thread = threading.Thread(target=self._reflection_loop, daemon=True)
+        self.reflection_thread.start()
         
         if self.event_bus:
             self.event_bus.subscribe("save_memory", self._on_save_memory_event)
@@ -269,19 +318,35 @@ class MemoryService:
                     break
                 user_msg, assistant_msg = item
                 
-                if Settings.USE_SQLITE:
-                    memory_text = f"User: {user_msg}\nJarvis: {assistant_msg}"
-                    print(f"[MemoryService PRINT] SQLite active. Generating embedding for DB...")
-                    embedding = EmbeddingClient.get_embedding(memory_text)
-                    self.db_service.add_memory(memory_text, time.time(), embedding)
-                else:
-                    self.vector_store.add_memory(user_msg, assistant_msg)
-                    
+                # Run the V2 memory extraction & promotion pipeline
+                self.promoter.promote_conversation_turn(user_msg, assistant_msg)
+                
+                # Rebuild index and graph to include the newly promoted items
+                self.graph.rebuild_graph(self.vault)
+                self.indexer.rebuild_index(self.vault)
+                
                 self.queue.task_done()
                 print("[MemoryService PRINT] Task marked as done.")
             except Exception as e:
                 print(f"[MemoryService PRINT] Worker error: {e}")
                 
+    def _reflection_loop(self):
+        # Run reflection periodically (default every 6 hours)
+        # Wait 30 seconds after startup before running first reflection
+        time.sleep(30.0)
+        while True:
+            try:
+                logger.info("[MemoryService] Starting background memory reflection...")
+                self.reflector.run_reflection()
+                logger.info("[MemoryService] Background memory reflection completed.")
+            except Exception as e:
+                logger.error(f"[MemoryService] Reflection loop error: {e}")
+            time.sleep(6.0 * 3600.0)
+            
+    def run_reflection(self):
+        """Manually trigger reflection process."""
+        self.reflector.run_reflection()
+        
     def _on_save_memory_event(self, data: Dict[str, str]):
         """Callback executing when save_memory events are emitted on the bus."""
         print(f"[MemoryService PRINT] Received save_memory event: {data}")
@@ -305,40 +370,16 @@ class MemoryService:
         return self.conversation_memory.get_history()
         
     def retrieve_long_term_context(self, query: str, top_k: int = 3) -> List[str]:
-        if Settings.USE_SQLITE:
-            memories = self.db_service.get_memories()
-            if not memories:
+        try:
+            ranked = self.retriever.retrieve(query, top_k=top_k)
+            if not ranked:
                 return []
-                
-            query_embedding = EmbeddingClient.get_embedding(query)
-            scored_memories = []
+            context = self.retriever.build_context(query, ranked)
+            return [context]
+        except Exception as e:
+            logger.error(f"[MemoryService] Error in retrieve_long_term_context: {e}")
+            return []
             
-            if query_embedding is not None:
-                for mem in memories:
-                    if mem.get("embedding") is not None:
-                        sim = cosine_similarity(query_embedding, mem["embedding"])
-                        scored_memories.append((sim, mem["text"]))
-                    else:
-                        sim = jaccard_similarity(query, mem["text"])
-                        scored_memories.append((sim * 0.7, mem["text"]))
-            else:
-                for mem in memories:
-                    sim = jaccard_similarity(query, mem["text"])
-                    scored_memories.append((sim, mem["text"]))
-                    
-            scored_memories.sort(key=lambda x: x[0], reverse=True)
-            
-            relevant_memories = []
-            for sim, text in scored_memories:
-                is_embedding_search = (query_embedding is not None)
-                threshold = 0.35 if is_embedding_search else 0.05
-                if sim > threshold:
-                    relevant_memories.append(text)
-                    
-            return relevant_memories[:top_k]
-        else:
-            return self.vector_store.retrieve_context(query, top_k=top_k)
-        
     def clear(self):
         """Clears short-term memory."""
         self.conversation_memory.clear()
@@ -347,3 +388,4 @@ class MemoryService:
         """Stops the worker thread."""
         self.queue.put(None)
         self.worker_thread.join()
+
