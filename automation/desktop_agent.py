@@ -178,8 +178,11 @@ class DesktopAgent:
             logger.error(f"[Desktop Agent] Missing visual libraries: {err}")
             return "Visual automation libraries are not loaded. Please verify dependencies are installed."
 
-        temp_screenshot = "temp_desktop.png"
-        temp_optimized = "temp_desktop_opt.jpg"
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        scratch_dir = os.path.join(project_root, "scratch")
+        os.makedirs(scratch_dir, exist_ok=True)
+        temp_screenshot = os.path.join(scratch_dir, "temp_desktop.png")
+        temp_optimized = os.path.join(scratch_dir, "temp_desktop_opt.jpg")
 
         try:
             # 1. Capture screen buffer

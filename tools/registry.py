@@ -15,16 +15,18 @@ class Tool:
         try:
             # Match parameters using inspect signature to avoid passing extra arguments
             sig = inspect.signature(self.func)
-            valid_args = {}
-            for name, param in sig.parameters.items():
-                if name in kwargs:
-                    valid_args[name] = kwargs[name]
-                elif param.default is not inspect.Parameter.empty:
-                    # Parameter has a default value, let Python handle it or set default
-                    pass
-                elif param.kind in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL):
-                    # Handle *args or **kwargs if the function takes them
-                    pass
+            has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            
+            if has_var_keyword:
+                valid_args = kwargs
+            else:
+                valid_args = {}
+                for name, param in sig.parameters.items():
+                    if name in kwargs:
+                        valid_args[name] = kwargs[name]
+                    elif param.default is not inspect.Parameter.empty:
+                        # Parameter has a default value, let Python handle it
+                        pass
             
             result = self.func(**valid_args)
             return str(result)
