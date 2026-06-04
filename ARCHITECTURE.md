@@ -1,6 +1,6 @@
-# JARVBOI Desktop Application Architecture
+# 🏛️ JARVBOI Desktop Application Architecture & Data Flow
 
-Welcome to the architectural documentation for **Jarvboi**, a premium local AI voice assistant styled after JARVIS. This document details the systems design, component interactions, runtime environment, background voice activation pipeline, and WebSocket protocol specification.
+Welcome to the architectural documentation for **Jarvboi**, a premium local AI voice assistant styled after JARVIS. This document details the system design, component interactions, runtime environment, background voice activation pipeline, vector memory database, real-time interruption protocol, and alternative/fallback routing paths.
 
 ---
 
@@ -8,35 +8,39 @@ Welcome to the architectural documentation for **Jarvboi**, a premium local AI v
 
 Jarvboi is built as a hybrid local application combining three decoupled systems into a unified desktop client:
 
-1. **Electron Wrapper (Desktop Orchestrator)**: Manages OS-level features, custom frameless window creation, standard system tray operations, and the lifecycle of the sidecar Python backend process.
-2. **Vite Frontend (HUD WebApp)**: Serves a high-fidelity glassmorphic neon dashboard that handles user messaging, displays streaming thought diagnostics, and animates the core AI orb.
+1. **Electron Wrapper (Desktop Orchestrator)**: Manages OS-level features, custom frameless window creation, standard system tray operations, and the lifecycle of the FastAPI Python backend process.
+2. **Vite Frontend (HUD WebApp)**: Serves a high-fidelity glassmorphic neon dashboard that handles user messaging, displays streaming thought diagnostics, plays neural audio, and animates the core AI orb.
 3. **FastAPI Backend (AI & Speech Engine)**: Orchestrates local tool executions, interfaces with Ollama/Gemini, and runs an offline, continuous background voice activation system.
 
 ```mermaid
 graph TB
-    subgraph Client UI [HUD Frontend]
+    subgraph HUD [HUD Frontend / Vite App]
         direction TB
-        UI[index.html WebPage]
+        UI[index.html Layout]
         Orb[Core AI Orb Controller]
-        JS[main.js Socket Handler]
+        JS[main.js WebSocket Client]
+        AudioHTML[HTML5 Audio Context]
     end
 
-    subgraph Desktop Wrapper [Electron main.js]
+    subgraph Wrapper [Desktop Wrapper / Electron main.js]
         Tray[System Tray Icon & Menu]
         IPC[IPC Main Listener]
         ProcessMgr[Sidecar Process Manager]
     end
 
-    subgraph Sidecar Server [FastAPI api.py]
-        WS[WebSocket Manager]
+    subgraph Sidecar [Sidecar Server / FastAPI api.py]
+        direction TB
+        WS[WebSocket Manager & Queue]
         VoiceLoop[Background Voice Loop Thread]
         Assistant[core/assistant.py pipeline]
+        VectorDB[(Vector Store / scratch/vector_memory.json)]
     end
 
-    subgraph System Services [Windows OS]
+    subgraph SystemServices [System Services / Windows OS]
         Microphone[Speech Recognition Input]
-        TTS[System.Speech.Synthesis Output]
+        LocalTTS[PowerShell PresentationCore Output]
         Beep[winsound Beep Controller]
+        WSL[WSL - wsl ollama serve]
     end
 
     %% Process Lifetimes
@@ -46,103 +50,149 @@ graph TB
     UI <-->|WebSockets ws://127.0.0.1:8000/ws/chat| WS
     JS <-->|Secure Preload Bridge IPC| IPC
     
-    %% Voice Execution
+    %% Voice Execution & Data Flow
     VoiceLoop -->|Continuous Listen| Microphone
     VoiceLoop -->|Futuristic double-beep| Beep
-    VoiceLoop -->|Modular Assistant Execution| Assistant
-    VoiceLoop -->|Offline Speech Synthesis| TTS
-    VoiceLoop -.->|Thread-safe websocket broadcast| WS
+    VoiceLoop -->|Modular Pipeline Execution| Assistant
+    
+    %% Memory Interactions
+    Assistant <-->|Semantic Context & Sync Store| VectorDB
+    
+    %% Output Routing Options (Alternative Paths)
+    Assistant -->|Option A: Stream Base64 Audio| WS
+    WS -->|Play Base64 stream| AudioHTML
+    Assistant -->|Option B: Play Local MP3| LocalTTS
+    
+    %% Resilience & Subprocesses
+    Assistant -.->|WSL Auto-Launch Command| WSL
 ```
 
 ---
 
-## 🎙️ Continuous Voice Activation Pipeline
+## 🎙️ Data Routing & Alternative Paths
 
-The most critical capability of Jarvboi is its background wake-word activation, which remains active even when the Electron window is minimized or hidden in the tray.
+Jarvboi is built to be resilient, supporting offline standalone operation, cloud fallback, and immediate interface interrupts. Below are the details of the alternative paths for each sub-system.
 
-### The Background Daemon Thread
-To avoid blocking FastAPI's main thread and uvicorn's event loop, the server spawns a dedicated, unblocked Python background thread on startup:
+### 1. Command Input Routing
+*   **Path A (Voice Command - Default)**: Captured via the microphone by the background loop thread, transcribed by `stt.py`, and piped to the `Assistant` pipeline.
+*   **Path B (HUD Text Command)**: Type a query into the front-end chat input box, send it over the active WebSocket, and consume it via FastAPI uvicorn.
+*   **Path C (CLI Console / Voice Loop)**: Run the assistant via `main.py` or `voice_assistant.py` in standalone console terminal modes without launching Electron.
 
-```python
-# Startup event triggers the thread
-@app.on_event("startup")
-async def startup_event():
-    global main_loop
-    main_loop = asyncio.get_running_loop()
-    voice_thread = threading.Thread(target=background_voice_loop, daemon=True)
-    voice_thread.start()
+### 2. Speech-to-Text (STT) Transcription Routing
+*   **Path A (Faster-Whisper Offline - Default)**: Employs a local Whisper engine (`tiny.en` model) running on CPU in `int8` quantization. It utilizes Silero Voice Activity Detection (VAD) to filter background static.
+*   **Path B (Google Web Speech API Fallback)**: Automatically falls back to Google's cloud API if the local Whisper dependencies fail to initialize or load.
+*   **Tuned Latency Parameterization**: To make conversation feel natural, the recognizer settings are optimized:
+    - `dynamic_energy_threshold = False`: Locks microphone calibration to prevent threshold floating.
+    - `pause_threshold = 0.5s`: Triggers speech capture only 0.5 seconds after the user stops speaking, cutting out typical 2.0-second silence delays.
+
+### 3. Text-to-Speech (TTS) & Audio Playback Routing
+*   **Path A (WebSocket Streaming - Active UI)**: The assistant generates high-quality neural voice chunks (`en-GB-RyanNeural`) using `edge-tts`, encodes the MP3 binary to Base64, and sends it over the WebSocket. The browser plays it directly via the HTML5 `Audio` context.
+*   **Path B (Native Windows CLI Fallback)**: If the backend is running in CLI standalone mode, the base64 audio is decoded, written to a temporary scratch file `scratch/tts_output.mp3`, and played asynchronously in a hidden subprocess using Windows PowerShell assemblies (`System.Windows.Media.MediaPlayer`).
+
+### 4. LLM Routing & WSL Auto-Launch Resilience
+```mermaid
+graph TD
+    Start[User Command] --> ProviderCheck{Settings.LLM_PROVIDER?}
+    
+    ProviderCheck -->|gemini| CheckGeminiAPI{GEMINI_API_KEY Configured?}
+    CheckGeminiAPI -->|Yes| RunGemini[Execute Gemini 2.5 Flash API]
+    CheckGeminiAPI -->|No| WarnOllama[Warning: Fallback to local Ollama] --> CheckOllamaRunning
+    
+    ProviderCheck -->|ollama| CheckOllamaRunning{Ollama Server Online?}
+    CheckOllamaRunning -->|Yes| RunOllama[Execute local Ollama API]
+    CheckOllamaRunning -->|No| AskWSL[Prompt User: 'Start Ollama in WSL?']
+    
+    AskWSL -->|User says YES| BootWSL[Execute: wsl ollama serve]
+    BootWSL --> WaitOllama{Connection Online?}
+    WaitOllama -->|Yes| RunOllama
+    WaitOllama -->|No| PromptGemini[Prompt User: 'Switch to Gemini?']
+    
+    AskWSL -->|User says NO| PromptGemini
+    
+    PromptGemini -->|User says YES| SwitchGemini[Load GeminiLLM Provider] --> RunGemini
+    PromptGemini -->|User says NO| WaitIdle[Wait for manual Ollama launch]
 ```
+*   **Wake-Word Bypass Logic**: When the assistant is actively waiting for a confirmation (such as launching WSL or switching to Gemini), the wake-word thread disables the `"Jarvis"` activation lock. It listens directly for confirmation responses (like *"yes"*, *"sure"*, *"no"*), enabling natural multi-turn dialogue.
 
-### Wake Word Lifecycle & Transition Flow
+### 5. Persistent Long-Term Memory (Vector Database)
+*   **Memory Creation**: After completing a conversational turn, the user message and final response are concatenated (`User: ... \nJarvis: ...`) and embedded.
+*   **Embedding Extraction Paths**:
+    - **Path A (Gemini Embeddings)**: Calls Google's RESTful `text-embedding-004` model.
+    - **Path B (Ollama Embeddings)**: Queries local Ollama `/api/embeddings` using `nomic-embed-text` (or falls back to the active conversational LLM model).
+    - **Path C (Jaccard Similarity Fallback)**: If API limits or offline modes block embedding calls, searches past memories using a pure-Python word-overlap index (Jaccard similarity).
+*   **RAG Context Injection**: When a new user query is received, the Vector Store is searched for the top 3 similar past memories. These are formatted and dynamically pre-pended to the system instruction prompt:
+    ```markdown
+    RELEVANT PAST CONVERSATIONS/CONTEXT:
+    User: I am building a project called Anti-gravity.
+    Jarvis: I will remember that project, sir.
+    ---
+    (Use this context to remember facts from past sessions/conversations with the user.)
+    ```
+*   **Storage file**: Persisted locally in `scratch/vector_memory.json`.
+
+---
+
+## ⚡ Interruption Protocol (Real-Time Cancel)
+
+To allow the user to interrupt Jarvis mid-sentence (either by clicking the AI Orb, typing a message, or submitting a new command), the system operates a concurrent WebSocket protocol:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Mic as Microphone (Input)
-    participant Thread as Background Voice Loop
-    participant WS as WebSocket Broker
-    participant UI as Vite HUD Orb
-    participant LLM as AI Assistant Pipeline
-    participant TTS as System Speech (Output)
+    actor User as User (HUD or Voice)
+    participant JS as HUD WebApp (main.js)
+    participant WS as FastAPI WebSocket Chat
+    participant Loop as Background Voice Thread
+    participant LLM as Assistant Pipeline
 
-    Note over Thread: Calibrated for ambient noise
-    
-    rect rgb(10, 20, 30)
-        Note over Mic, Thread: Stage 1: Idle Listening
-        loop Continuous Listening
-            Thread->>Mic: listen_mic(timeout=3, limit=3)
-            Mic-->>Thread: Speech captured
-            Note over Thread: Check if "Jarvis" / "Jarvboi" in text
-        end
-    end
-
-    rect rgb(0, 40, 60)
-        Note over Thread, UI: Stage 2: Activation Triggered
-        Thread->>Thread: Play Beep Chime (1200Hz -> 1600Hz)
-        Thread->>WS: Broadcast state: "listening"
-        WS->>UI: Animate Orb: Active LISTENING State (pulsing cyan)
-    end
-
-    rect rgb(50, 40, 20)
-        Note over Mic, Thread: Stage 3: Command Capture
-        Thread->>Mic: listen_mic(timeout=8, limit=9)
-        Mic-->>Thread: Spoken Command: "Explain your architecture."
-        Thread->>WS: Broadcast: USER (Voice) "Explain your architecture."
-        Thread->>WS: Broadcast state: "processing"
-        WS->>UI: Animate Orb: Active PROCESSING State (spinning yellow)
-    end
-
-    rect rgb(10, 50, 30)
-        Note over Thread, TTS: Stage 4: Execution & Response
-        Thread->>LLM: execute("Explain your architecture")
-        LLM-->>Thread: Final Response text
-        Thread->>WS: Broadcast: final_response
-        Thread->>TTS: speak(response_text)
-        TTS-->>Thread: Vocal execution completed
-        Thread->>WS: Broadcast state: "idle"
-        WS->>UI: Animate Orb: Slow Pulsating IDLE State
-    end
+    Note over User, JS: Assistant is currently speaking/processing
+    User->>JS: Click Orb OR start typing input
+    JS->>JS: activeAudio.pause() (Instant local mute)
+    JS->>WS: Send JSON: {"type": "interrupt"}
+    WS->>LLM: Set assistant.interrupted = True
+    WS->>JS: Broadcast to all: {"type": "stop_audio"}
+    Loop->>Loop: Detect assistant.interrupted == True
+    Loop->>Loop: Halt active speech sleep / Break loop
+    Note over Loop: Resets to IDLE state
 ```
 
 ---
 
 ## 🔌 WebSocket Message Specifications
 
-All communication between the frontend HUD and the sidecar FastAPI backend occurs over WebSockets at `ws://127.0.0.1:8000/ws/chat`. Both text commands submitted via the input box and voice triggers route through this socket.
+All communication between the frontend HUD and the sidecar FastAPI backend occurs over WebSockets at `ws://127.0.0.1:8000/ws/chat`.
 
-### Real-Time Event Payloads
+### Client-to-Server Event Payloads
+
+#### 1. Send Text Command
+```json
+{
+  "message": "User's text command to execute"
+}
+```
+
+#### 2. Trigger Interruption
+Instantly cancels current audio streams and halts LLM execution loops.
+```json
+{
+  "type": "interrupt"
+}
+```
+
+---
+
+### Server-to-Client Event Payloads
 
 #### 1. System Status Update
-Sent to transition the visual states of the HUD and AI Orb.
 ```json
 {
   "type": "status",
-  "status": "listening" | "processing" | "idle"
+  "status": "listening" | "processing" | "speaking" | "idle"
 }
 ```
 
 #### 2. User Voice Command Logged
-Broadcasts a vocal transcription to display it in the chat interface as an outgoing user message.
+Broadcasts spoken transcriptions to append to the conversation logs.
 ```json
 {
   "type": "voice_command",
@@ -151,7 +201,6 @@ Broadcasts a vocal transcription to display it in the chat interface as an outgo
 ```
 
 #### 3. AI Pipeline Thoughts
-Streams the real-time reasoning steps of the LLM parser.
 ```json
 {
   "type": "thought",
@@ -159,94 +208,43 @@ Streams the real-time reasoning steps of the LLM parser.
 }
 ```
 
-#### 4. Tool Execution Triggered
-Logs when the assistant activates a system automation tool (e.g. searching the web, terminal automation).
+#### 4. Tool Execution Logs
 ```json
 {
   "type": "tool_start",
-  "tool_name": "open_website",
-  "tool_args": {
-    "url": "https://google.com"
-  }
+  "tool_name": "desktop_launch_application",
+  "tool_args": { "app_name": "Spotify" }
 }
 ```
-
-#### 5. Tool Response Received
-Reports the outcome of a modular tool execution.
 ```json
 {
   "type": "tool_end",
-  "tool_name": "open_website",
+  "tool_name": "desktop_launch_application",
   "result": "Success"
 }
 ```
 
-#### 6. Final Assistant Response
-Delivers the final output which is also spoken vocally.
+#### 5. Streaming Speech Output
+Provides the base64 encoded audio bytes to play natively in the HUD UI.
+```json
+{
+  "type": "speak",
+  "audio": "UklGRi...[Base64 Audio Bytes]..."
+}
+```
+
+#### 6. Stop Voice Playback
+Instructs all frontends to immediately cease any active voice output.
+```json
+{
+  "type": "stop_audio"
+}
+```
+
+#### 7. Final Assistant Response
 ```json
 {
   "type": "final_response",
   "response": "Here is the architectural review..."
 }
 ```
-
-#### 7. System Diagnostic Notification
-Logs general system information, connection states, or warnings.
-```json
-{
-  "type": "system",
-  "message": "🎙️ Jarvis Activated. Listening..."
-}
-```
-
----
-
-## ⚙️ Desktop Window & Process Lifecycle
-
-The Electron main script (`electron-main.js`) acts as the absolute process controller, ensuring the sidecar server never runs orphaned:
-
-1. **Python Spawn**:
-   * Electron resolves the path to the workspace's virtual environment (`venv/Scripts/python.exe` on Windows).
-   * Spawns `api.py` as a background sidecar. It specifies `windowsHide: true` to suppress CMD terminal console flash.
-2. **Standard Stream Pipes**:
-   * Pipes backend stdout/stderr directly into Electron console logs (`console.log` / `console.error`) to simplify developer diagnostics.
-3. **Systray Integration**:
-   * Attaches a native icon representing the neon circular orb.
-   * Intercepts `window.on('close')` to invoke `event.preventDefault()` and hides the frame (`mainWindow.hide()`), keeping the assistant listening in the background.
-4. **Graceful Teardown**:
-   * Listeners for `will-quit` send `SIGINT` to the child python subprocess, ensuring the local port and background recording threads close cleanly.
-
----
-
-## 🎨 Visual Design & Core Orb Animations
-
-The user interface uses CSS-driven hardware-accelerated animations to bring the futuristic Jarvis HUD to life:
-
-| Visual State | Orb Core Style | Orbital Rings Style | Status Label |
-| :--- | :--- | :--- | :--- |
-| **IDLE** | Soft white-cyan radial gradient; steady `30px` cyan shadow. | Three rings rotating slowly in opposite directions (`spin`, `spin-reverse`). | `IDLE` (Steady) |
-| **LISTENING** | Glow expands to `60px` cyan-blue shadow; dynamic size pulse keyframes. | Ring borders brighten to full white-cyan; spin speed accelerates to `1.5s`. | `LISTENING...` (Neon ripple) |
-| **PROCESSING** | Scale increases to `1.2`; color shifts to neon yellow-orange. | Ring borders shift to yellow/red warning colors; rotation doubles in speed. | `PROCESSING...` (Pulsing yellow) |
-
----
-
-## 💻 Developer Guide & Commands
-
-### Development Setup
-Start the Vite development compiler and Electron in dev mode concurrently:
-```powershell
-# In terminal 1 (serve UI)
-cd ui
-npm run dev
-
-# In terminal 2 (start Electron with sidecar)
-npm start -- --dev
-```
-
-### Production Bundling
-Compile the Vite frontend into a static bundle so it runs entirely offline under Electron's `file://` protocol:
-```powershell
-# Run the root build script (triggers Vite build in ui/dist)
-npm run ui-build
-```
-This writes files into `ui/dist/` with relative reference paths (`base: './'`), loading assets flawlessly without any active dev server.
