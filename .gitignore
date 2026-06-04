@@ -27,4 +27,10 @@ release/
 
 # System Files
 .DS_Store
-Thumbs.dbscratch/
+Thumbs.db
+
+# Custom Folders
+scratch/
+obsidian/
+commands/
+test_q/
