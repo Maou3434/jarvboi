@@ -116,25 +116,8 @@ def parse_indented_yaml(lines: List[str]) -> Dict[str, Any]:
     return result
 
 
-# --- Lightweight Jaccard Similarity for local skill searches ---
-NOISY_WORDS = {"what", "was", "that", "is", "the", "a", "an", "and", "user", "jarvis", "to", "of", "in", "it", "for", "on", "with", "as", "at", "by", "this", "there", "they", "we", "you", "i", "me", "my", "your", "he", "she", "it"}
-
-def clean_text(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r'[^\w\s-]', '', text)
-    return text
-
-def compute_jaccard(text1: str, text2: str) -> float:
-    c1 = clean_text(text1)
-    c2 = clean_text(text2)
-    words1 = set(w for w in c1.split() if w not in NOISY_WORDS)
-    words2 = set(w for w in c2.split() if w not in NOISY_WORDS)
-    
-    if not words1: words1 = set(c1.split())
-    if not words2: words2 = set(c2.split())
-    if not words1 or not words2:
-        return 0.0
-    return len(words1.intersection(words2)) / len(words1.union(words2))
+# Import Jaccard helpers from centralized text helpers
+from utils.text_helpers import jaccard_similarity as compute_jaccard
 
 
 class SkillService:

@@ -229,30 +229,6 @@ class OllamaLLM:
         text = text.strip()
         parsed_dict = None
         
-        def find_conversational_value(data):
-            if isinstance(data, dict):
-                for k in ["speech", "text", "Assistant", "assistant", "message", "thought", "response"]:
-                    if k in data:
-                        val = data[k]
-                        if isinstance(val, str) and val.strip():
-                            stripped = val.strip()
-                            if not (stripped.startswith("{") and stripped.endswith("}")):
-                                return stripped
-                        elif isinstance(val, (dict, list)):
-                            res = find_conversational_value(val)
-                            if res:
-                                return res
-                for v in data.values():
-                    res = find_conversational_value(v)
-                    if res:
-                        return res
-            elif isinstance(data, list):
-                for item in data:
-                    res = find_conversational_value(item)
-                    if res:
-                        return res
-            return None
-
         code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
         if code_block_match:
             try:
@@ -278,7 +254,7 @@ class OllamaLLM:
                     try:
                         clean_thought_str = thought_str.replace("\\'", "'")
                         nested_json = json.loads(clean_thought_str)
-                        conversational_val = find_conversational_value(nested_json)
+                        conversational_val = self._find_conversational_value(nested_json)
                         if conversational_val:
                             parsed_dict["thought"] = conversational_val
                             unpacked = True

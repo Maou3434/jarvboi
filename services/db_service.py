@@ -35,16 +35,6 @@ class DbService:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Conversational vector memories table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS memories (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        text TEXT NOT NULL,
-                        timestamp REAL NOT NULL,
-                        embedding_json TEXT
-                    )
-                """)
-                
                 # Skills table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS skills (
@@ -64,47 +54,7 @@ class DbService:
         except Exception as e:
             logger.error(f"[DbService] Failed to initialize database: {e}")
             
-    # --- memories CRUD operations ---
-    
-    def add_memory(self, text: str, timestamp: float, embedding: Optional[List[float]]) -> bool:
-        """Inserts a conversation log context record with optional embedding coordinates."""
-        try:
-            embedding_json = json.dumps(embedding) if embedding is not None else None
-            with self._get_connection() as conn:
-                conn.execute(
-                    "INSERT INTO memories (text, timestamp, embedding_json) VALUES (?, ?, ?)",
-                    (text, timestamp, embedding_json)
-                )
-                conn.commit()
-            return True
-        except Exception as e:
-            logger.error(f"[DbService] Error adding memory record: {e}")
-            return False
-            
-    def get_memories(self) -> List[Dict[str, Any]]:
-        """Retrieves all memory log records from the database."""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.execute("SELECT text, timestamp, embedding_json FROM memories ORDER BY timestamp ASC")
-                rows = cursor.fetchall()
-                
-            result = []
-            for row in rows:
-                emb = None
-                if row["embedding_json"]:
-                    try:
-                        emb = json.loads(row["embedding_json"])
-                    except Exception:
-                        pass
-                result.append({
-                    "text": row["text"],
-                    "timestamp": row["timestamp"],
-                    "embedding": emb
-                })
-            return result
-        except Exception as e:
-            logger.error(f"[DbService] Error retrieving memory records: {e}")
-            return []
+
             
     # --- skills CRUD operations ---
     

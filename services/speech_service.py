@@ -142,26 +142,25 @@ class SpeechService:
             return ""
 
     def generate_speech_base64(self, text: str, voice: str = "en-GB-RyanNeural") -> str:
-        """Generates neural speech base64 MP3 stream using edge-tts synchronously."""
+        """Generates neural speech base64 MP3 stream using edge-tts synchronously in memory."""
         try:
+            async def stream_to_buffer():
+                communicate = edge_tts.Communicate(text, voice)
+                audio_data = []
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        audio_data.append(chunk["data"])
+                return b"".join(audio_data)
+                
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
-            temp_file = "temp_voice.mp3"
-            communicate = edge_tts.Communicate(text, voice)
-            loop.run_until_complete(communicate.save(temp_file))
+            raw_audio = loop.run_until_complete(stream_to_buffer())
             loop.close()
             
-            if os.path.exists(temp_file):
-                with open(temp_file, "rb") as f:
-                    encoded = base64.b64encode(f.read()).decode("utf-8")
-                try:
-                    os.remove(temp_file)
-                except Exception:
-                    pass
-                return encoded
+            if raw_audio:
+                return base64.b64encode(raw_audio).decode("utf-8")
         except Exception as e:
-            logger.error(f"[SpeechService] Failed to generate TTS audio: {e}")
+            logger.error(f"[SpeechService] Failed to generate TTS audio in memory: {e}")
         return ""
 
     def play_mp3_local_nonblocking(self, file_path: str):

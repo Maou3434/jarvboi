@@ -23,30 +23,7 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
         return 0.0
     return dot_product(v1, v2) / (mag1 * mag2)
 
-NOISY_WORDS = {"what", "was", "that", "is", "the", "a", "an", "and", "user", "jarvis", "to", "of", "in", "it", "for", "on", "with", "as", "at", "by", "this", "there", "they", "we", "you", "i", "me", "my", "your", "he", "she", "it"}
-
-def clean_text_for_similarity(text: str) -> str:
-    import re
-    text = text.lower()
-    text = re.sub(r'[^\w\s-]', '', text)
-    return text
-
-def jaccard_similarity(text1: str, text2: str) -> float:
-    """Calculates word-overlap (Jaccard) similarity for fallback keyword search, filtering noisy words."""
-    clean1 = clean_text_for_similarity(text1)
-    clean2 = clean_text_for_similarity(text2)
-    
-    words1 = set(w for w in clean1.split() if w not in NOISY_WORDS)
-    words2 = set(w for w in clean2.split() if w not in NOISY_WORDS)
-    
-    if not words1:
-        words1 = set(clean1.split())
-    if not words2:
-        words2 = set(clean2.split())
-        
-    if not words1 or not words2:
-        return 0.0
-    return len(words1.intersection(words2)) / len(words1.union(words2))
+from utils.text_helpers import NOISY_WORDS, clean_text_for_similarity, jaccard_similarity
 
 
 # --- Embedding Retrieval Client ---
@@ -151,86 +128,7 @@ class ConversationMemory:
                 self.messages = self.messages[-self.max_messages:]
 
 
-# --- Long-term persistent vector storage ---
-class VectorStore:
-    """A persistent, lightweight, file-backed vector database."""
-    
-    def __init__(self, filepath: Optional[str] = None):
-        if filepath is None:
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            scratch_dir = os.path.join(project_root, "scratch")
-            os.makedirs(scratch_dir, exist_ok=True)
-            self.filepath = os.path.join(scratch_dir, "vector_memory.json")
-        else:
-            self.filepath = filepath
-            
-        self.memories: List[Dict[str, Any]] = []
-        self.load()
-        
-    def load(self):
-        if os.path.exists(self.filepath):
-            try:
-                with open(self.filepath, "r", encoding="utf-8") as f:
-                    self.memories = json.load(f)
-                logger.info(f"[VectorStore] Loaded {len(self.memories)} memories.")
-            except Exception as e:
-                logger.error(f"[VectorStore] Failed to load memories: {e}")
-                self.memories = []
-        else:
-            self.memories = []
-            
-    def save(self):
-        try:
-            print(f"[VectorStore PRINT] Saving memories to {self.filepath}, count: {len(self.memories)}")
-            with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump(self.memories, f, indent=2)
-        except Exception as e:
-            logger.error(f"[VectorStore] Failed to save memories: {e}")
-            
-    def add_memory(self, user_query: str, assistant_response: str):
-        print(f"[VectorStore PRINT] add_memory started for query '{user_query}'")
-        memory_text = f"User: {user_query}\nJarvis: {assistant_response}"
-        embedding = EmbeddingClient.get_embedding(memory_text)
-        print(f"[VectorStore PRINT] add_memory embedding generated (is None: {embedding is None})")
-        
-        self.memories.append({
-            "text": memory_text,
-            "timestamp": time.time(),
-            "embedding": embedding
-        })
-        self.save()
-        print(f"[VectorStore PRINT] add_memory finished")
-        
-    def retrieve_context(self, query: str, top_k: int = 3) -> List[str]:
-        if not self.memories:
-            return []
-            
-        query_embedding = EmbeddingClient.get_embedding(query)
-        scored_memories = []
-        
-        if query_embedding is not None:
-            for mem in self.memories:
-                if mem.get("embedding") is not None:
-                    sim = cosine_similarity(query_embedding, mem["embedding"])
-                    scored_memories.append((sim, mem["text"]))
-                else:
-                    sim = jaccard_similarity(query, mem["text"])
-                    scored_memories.append((sim * 0.7, mem["text"]))
-        else:
-            for mem in self.memories:
-                sim = jaccard_similarity(query, mem["text"])
-                scored_memories.append((sim, mem["text"]))
-                
-        scored_memories.sort(key=lambda x: x[0], reverse=True)
-        
-        relevant_memories = []
-        for sim, text in scored_memories:
-            is_embedding_search = (query_embedding is not None)
-            threshold = 0.35 if is_embedding_search else 0.05
-            if sim > threshold:
-                relevant_memories.append(text)
-                
-        return relevant_memories[:top_k]
+
 
 
 # --- Consolidated Memory Service ---
@@ -308,12 +206,12 @@ class MemoryService:
             logger.info("[MemoryService] Subscribed to 'save_memory' events on EventBus.")
             
     def _worker_loop(self):
-        print("[MemoryService PRINT] Worker loop thread started.")
+        logger.info("[MemoryService] Worker loop thread started.")
         while True:
             try:
-                print("[MemoryService PRINT] Waiting for item in queue...")
+                logger.debug("[MemoryService] Waiting for item in queue...")
                 item = self.queue.get()
-                print(f"[MemoryService PRINT] Worker thread pulled item: {item}")
+                logger.debug(f"[MemoryService] Worker thread pulled item: {item}")
                 if item is None:
                     break
                 user_msg, assistant_msg = item
@@ -326,9 +224,9 @@ class MemoryService:
                 self.indexer.rebuild_index(self.vault)
                 
                 self.queue.task_done()
-                print("[MemoryService PRINT] Task marked as done.")
+                logger.debug("[MemoryService] Task marked as done.")
             except Exception as e:
-                print(f"[MemoryService PRINT] Worker error: {e}")
+                logger.error(f"[MemoryService] Worker error: {e}")
                 
     def _reflection_loop(self):
         # Run reflection periodically (default every 6 hours)
@@ -349,7 +247,7 @@ class MemoryService:
         
     def _on_save_memory_event(self, data: Dict[str, str]):
         """Callback executing when save_memory events are emitted on the bus."""
-        print(f"[MemoryService PRINT] Received save_memory event: {data}")
+        logger.debug(f"[MemoryService] Received save_memory event: {data}")
         user_message = data.get("user_message", "")
         response_text = data.get("response_text", "")
         if user_message and response_text:
@@ -357,7 +255,7 @@ class MemoryService:
             
     def save_memory_async(self, user_msg: str, assistant_msg: str):
         """Pushes user-assistant exchange into background processing queue."""
-        print(f"[MemoryService PRINT] Putting item in queue: ({user_msg}, {assistant_msg})")
+        logger.debug(f"[MemoryService] Putting item in queue: ({user_msg}, {assistant_msg})")
         self.queue.put((user_msg, assistant_msg))
         
     def add_short_term_message(self, role: str, content: str):
