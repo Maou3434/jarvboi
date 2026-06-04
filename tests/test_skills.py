@@ -115,7 +115,7 @@ def test_dynamic_exec_tool(val: str) -> str:
         # Verify tool registration in global registry
         registered_tool = registry.get_tool("test_dynamic_exec_tool")
         self.assertIsNotNone(registered_tool)
-        self.assertEqual(registered_tool.description, "Test dynamic skill executor.")
+        self.assertEqual(registered_tool.description, "A test dynamic executor tool.")
         
         # Execute tool to verify functional binding
         result = registered_tool.execute(val="Hello World")
