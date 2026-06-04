@@ -203,20 +203,4 @@ class MemoryReflector:
             
     def _log_archived_memory(self, date_str: str, log_line: str):
         """Appends archive information in daily notes."""
-        metadata, body = self.vault.read_note("Daily", date_str)
-        if not body:
-            metadata = {"created_at": time.time(), "type": "daily"}
-            body = f"# {date_str}\n\n## Conversations\n\n## Extracted Memories\n"
-            
-        if "## Extracted Memories" in body:
-            parts = body.split("## Extracted Memories", 1)
-            mem_section = parts[1].strip()
-            if mem_section:
-                mem_section = mem_section + "\n" + log_line
-            else:
-                mem_section = log_line
-            body = parts[0] + "## Extracted Memories\n" + mem_section + "\n"
-        else:
-            body = body.strip() + f"\n\n## Extracted Memories\n{log_line}\n"
-            
-        self.vault.write_note("Daily", date_str, metadata, body)
+        self.vault.append_to_daily_section(date_str, "Extracted Memories", log_line)

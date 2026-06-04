@@ -73,50 +73,12 @@ class MemoryPromoter:
                 
     def _log_conversation_to_daily(self, date_str: str, user_msg: str, assistant_msg: str):
         """Appends user-assistant dialogue turn under ## Conversations section of Daily note."""
-        metadata, body = self.vault.read_note("Daily", date_str)
-        if not body:
-            metadata = {"created_at": time.time(), "type": "daily"}
-            body = f"# {date_str}\n\n## Conversations\n\n## Extracted Memories\n"
-            
         convo_line = f"- User: {user_msg}\n- Jarvis: {assistant_msg}\n"
-        
-        # Insert conversation before Extracted Memories
-        if "## Conversations" in body:
-            parts = body.split("## Conversations", 1)
-            subparts = parts[1].split("## Extracted Memories", 1)
-            
-            middle = subparts[0].strip()
-            if middle:
-                middle = middle + "\n" + convo_line
-            else:
-                middle = convo_line
-                
-            rest = "## Extracted Memories" + subparts[1] if len(subparts) > 1 else "## Extracted Memories\n"
-            body = parts[0] + "## Conversations\n" + middle + "\n" + rest
-        else:
-            body = body.strip() + f"\n\n## Conversations\n{convo_line}\n"
-            
-        self.vault.write_note("Daily", date_str, metadata, body)
+        self.vault.append_to_daily_section(date_str, "Conversations", convo_line)
         
     def _log_memory_to_daily(self, date_str: str, log_line: str):
         """Appends extracted memory log under ## Extracted Memories section of Daily note."""
-        metadata, body = self.vault.read_note("Daily", date_str)
-        if not body:
-            metadata = {"created_at": time.time(), "type": "daily"}
-            body = f"# {date_str}\n\n## Conversations\n\n## Extracted Memories\n"
-            
-        if "## Extracted Memories" in body:
-            parts = body.split("## Extracted Memories", 1)
-            mem_section = parts[1].strip()
-            if mem_section:
-                mem_section = mem_section + "\n" + log_line
-            else:
-                mem_section = log_line
-            body = parts[0] + "## Extracted Memories\n" + mem_section + "\n"
-        else:
-            body = body.strip() + f"\n\n## Extracted Memories\n{log_line}\n"
-            
-        self.vault.write_note("Daily", date_str, metadata, body)
+        self.vault.append_to_daily_section(date_str, "Extracted Memories", log_line)
         
     def _update_or_create_long_term_note(self, category: str, entity_name: str, new_fact: str, score: float):
         """Updates or creates a long-term category note, invoking the LLM for conflict handling and merging."""

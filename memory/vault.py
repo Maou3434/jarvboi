@@ -142,3 +142,42 @@ class ObsidianVault:
             body = body.strip() + conflict_block
             
         self.write_note(category, title, metadata, body)
+
+    def append_to_daily_section(self, date_str: str, section_name: str, content: str):
+        """Appends log line or conversation turn under a specific section in today's Daily note."""
+        import time
+        metadata, body = self.read_note("Daily", date_str)
+        if not body:
+            metadata = {"created_at": time.time(), "type": "daily"}
+            body = f"# {date_str}\n\n## Conversations\n\n## Extracted Memories\n"
+            
+        header = f"## {section_name}"
+        
+        if section_name == "Conversations":
+            if "## Conversations" in body:
+                parts = body.split("## Conversations", 1)
+                subparts = parts[1].split("## Extracted Memories", 1)
+                
+                middle = subparts[0].strip()
+                if middle:
+                    middle = middle + "\n" + content
+                else:
+                    middle = content
+                    
+                rest = "## Extracted Memories" + subparts[1] if len(subparts) > 1 else "## Extracted Memories\n"
+                body = parts[0] + "## Conversations\n" + middle + "\n\n" + rest
+            else:
+                body = body.strip() + f"\n\n## Conversations\n{content}\n"
+        else:
+            if header in body:
+                parts = body.split(header, 1)
+                section_content = parts[1].strip()
+                if section_content:
+                    section_content = section_content + "\n" + content
+                else:
+                    section_content = content
+                body = parts[0] + header + "\n" + section_content + "\n"
+            else:
+                body = body.strip() + f"\n\n{header}\n{content}\n"
+                
+        self.write_note("Daily", date_str, metadata, body)

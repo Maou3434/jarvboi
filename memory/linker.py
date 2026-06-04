@@ -13,11 +13,18 @@ class ObsidianLinker:
     ) -> str:
         """Finds entity names and aliases in the text and wraps them in Obsidian links.
         Merges aliases to their canonical titles, and avoids duplicate/self links.
+        Uses a robust placeholder-based masking approach to prevent nested matching.
         """
         # Sort notes by title length descending to match longer titles first (e.g., 'Memory System' before 'Memory')
         sorted_notes = sorted(vault_notes, key=lambda x: len(x["title"]), reverse=True)
         
-        linked_text = text
+        # Mask already existing double bracket links
+        brackets = []
+        def mask_existing(match):
+            brackets.append(match.group(0))
+            return f"__LINK_BRACKET_PLACEHOLDER_{len(brackets)-1}__"
+            
+        linked_text = re.sub(r'\[\[.*?\]\]', mask_existing, text)
         
         for note in sorted_notes:
             title = note["title"]
@@ -37,15 +44,20 @@ class ObsidianLinker:
             aliases = list(dict.fromkeys(aliases))
             
             for alias in aliases:
-                # Regex matches alias on word boundaries, but NOT if already in double brackets [[...]]
-                # Lookahead and lookbehind assertions to ensure it's not bracketed
-                pattern = rf'(?<!\[\[)\b{re.escape(alias)}\b(?!\]\])'
+                # Match alias on word boundaries
+                pattern = rf'\b{re.escape(alias)}\b'
                 
-                # Replace with the canonical title link [[Title]]
-                replacement = f"[[{title}]]"
+                # Replace matching alias with a masked placeholder representing [[title]]
+                def replace_and_mask(match):
+                    brackets.append(f"[[{title}]]")
+                    return f"__LINK_BRACKET_PLACEHOLDER_{len(brackets)-1}__"
                 
-                linked_text = re.sub(pattern, replacement, linked_text, flags=re.IGNORECASE)
+                linked_text = re.sub(pattern, replace_and_mask, linked_text, flags=re.IGNORECASE)
                 
+        # Unmask all bracket links
+        for i, b in enumerate(brackets):
+            linked_text = linked_text.replace(f"__LINK_BRACKET_PLACEHOLDER_{i}__", b)
+            
         return linked_text
         
     def update_backlinks(
