@@ -24,8 +24,12 @@ def setup_logger() -> logging.Logger:
         
     logger.setLevel(getattr(logging, Settings.LOG_LEVEL.upper(), logging.INFO))
     
-    # Create file handler
-    file_handler = logging.FileHandler(Settings.LOG_FILE, encoding="utf-8")
+    # Create file handler with absolute path relative to project root
+    import os
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    log_file_path = Settings.LOG_FILE if os.path.isabs(Settings.LOG_FILE) else os.path.join(project_root, Settings.LOG_FILE)
+    
+    file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
     file_formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
     )
