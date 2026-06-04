@@ -15,6 +15,8 @@ class MockCommunicate:
     async def save(self, filepath):
         with open(filepath, "wb") as f:
             f.write(b"ID3" + b"\x00" * 1000)
+    async def stream(self):
+        yield {"type": "audio", "data": b"ID3" + b"\x00" * 1000}
 
 edge_tts.Communicate = MockCommunicate
 

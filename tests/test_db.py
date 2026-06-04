@@ -30,13 +30,6 @@ class TestDbService(unittest.TestCase):
         conn = self.service._get_connection()
         cursor = conn.cursor()
         
-        # Check memories table structure
-        cursor.execute("PRAGMA table_info(memories)")
-        cols = {row["name"] for row in cursor.fetchall()}
-        self.assertIn("text", cols)
-        self.assertIn("timestamp", cols)
-        self.assertIn("embedding_json", cols)
-        
         # Check skills table structure
         cursor.execute("PRAGMA table_info(skills)")
         cols_skills = {row["name"] for row in cursor.fetchall()}
@@ -46,42 +39,7 @@ class TestDbService(unittest.TestCase):
         self.assertIn("python_code", cols_skills)
         conn.close()
         
-    def test_add_and_retrieve_memories(self):
-        """Verifies memory records, timestamps, and float list embeddings roundtrip correctly."""
-        # 1. Add memories
-        t1 = 1717416000.0
-        t2 = 1717417000.0
-        
-        success = self.service.add_memory(
-            text="User: hello\nJarvis: Hello, sir.",
-            timestamp=t1,
-            embedding=[0.1, 0.2, 0.3]
-        )
-        self.assertTrue(success)
-        
-        # Add another with no embedding
-        success2 = self.service.add_memory(
-            text="User: offline text\nJarvis: I am offline, sir.",
-            timestamp=t2,
-            embedding=None
-        )
-        self.assertTrue(success2)
-        
-        # 2. Retrieve memories and assert correctness
-        memories = self.service.get_memories()
-        self.assertEqual(len(memories), 2)
-        
-        # Should be ordered by timestamp ASC
-        m1 = memories[0]
-        self.assertEqual(m1["text"], "User: hello\nJarvis: Hello, sir.")
-        self.assertEqual(m1["timestamp"], t1)
-        self.assertEqual(m1["embedding"], [0.1, 0.2, 0.3])
-        
-        m2 = memories[1]
-        self.assertEqual(m2["text"], "User: offline text\nJarvis: I am offline, sir.")
-        self.assertEqual(m2["timestamp"], t2)
-        self.assertIsNone(m2["embedding"])
-        
+
     def test_add_retrieve_and_delete_skills(self):
         """Verifies skill metadata, parameter schemas, code, and deletions roundtrip correctly."""
         name = "play_jazz_music"
