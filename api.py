@@ -26,17 +26,6 @@ from core.assistant import Assistant
 from core.state import AssistantState
 from utils.logger import logger
 
-app = FastAPI(title="JARVBOI API (Event-Driven)")
-
-# Enable CORS for the Vite UI
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # --- Global Orchestration Services ---
 event_bus = EventBus()
 llm_service = LLMService()
@@ -51,6 +40,51 @@ assistant = Assistant(
 
 active_connections = set()
 main_loop = None
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global main_loop
+    main_loop = asyncio.get_running_loop()
+    event_bus.set_async_loop(main_loop)
+    
+    # Launch background thread for voice activation
+    voice_thread = threading.Thread(target=background_voice_loop, daemon=True)
+    voice_thread.start()
+    
+    yield
+    
+    logger.info("[FastAPI] Shutdown sequence initiated...")
+    for ws in list(active_connections):
+        try: await ws.close()
+        except Exception: pass
+    active_connections.clear()
+    memory_service.stop()
+    
+    # Clean up temporary scratch assets
+    try:
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        scratch_dir = os.path.join(project_root, "scratch")
+        if os.path.exists(scratch_dir):
+            for f in os.listdir(scratch_dir):
+                if f.endswith((".mp3", ".png", ".jpg")):
+                    try: os.remove(os.path.join(scratch_dir, f))
+                    except Exception: pass
+    except Exception:
+        pass
+    logger.info("[FastAPI] Shutdown completed successfully.")
+
+app = FastAPI(title="JARVBOI API (Event-Driven)", lifespan=lifespan)
+
+# Enable CORS for the Vite UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # --- Event Bus Subscribers for WebSocket Streaming ---
@@ -328,38 +362,7 @@ async def websocket_chat(websocket: WebSocket):
         logger.info(f"WebSocket client disconnected. Active clients: {len(active_connections)}")
 
 
-# --- Startup and Shutdown Hooks ---
-@app.on_event("startup")
-async def startup_event():
-    global main_loop
-    main_loop = asyncio.get_running_loop()
-    event_bus.set_async_loop(main_loop)
-    
-    # Launch background thread for voice activation
-    voice_thread = threading.Thread(target=background_voice_loop, daemon=True)
-    voice_thread.start()
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("[FastAPI] Shutdown sequence initiated...")
-    for ws in list(active_connections):
-        try: await ws.close()
-        except Exception: pass
-    active_connections.clear()
-    memory_service.stop()
-    
-    # Clean up temporary scratch assets
-    try:
-        project_root = os.path.dirname(os.path.abspath(__file__))
-        scratch_dir = os.path.join(project_root, "scratch")
-        if os.path.exists(scratch_dir):
-            for f in os.listdir(scratch_dir):
-                if f.endswith((".mp3", ".png", ".jpg")):
-                    try: os.remove(os.path.join(scratch_dir, f))
-                    except Exception: pass
-    except Exception:
-        pass
-    logger.info("[FastAPI] Shutdown completed successfully.")
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=False)
