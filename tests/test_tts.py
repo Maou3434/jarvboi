@@ -5,14 +5,26 @@ import base64
 # Ensure local module resolves
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from speech.tts import generate_speech_base64_sync
+from services.speech_service import SpeechService
+import edge_tts
+
+class MockCommunicate:
+    def __init__(self, text, voice):
+        self.text = text
+        self.voice = voice
+    async def save(self, filepath):
+        with open(filepath, "wb") as f:
+            f.write(b"ID3" + b"\x00" * 1000)
+
+edge_tts.Communicate = MockCommunicate
 
 def test_neural_speech_generation():
     """Verifies the edge-tts engine correctly synthesizes text and packages raw MP3 streams as Base64."""
     print("Running: test_neural_speech_generation...")
     test_phrase = "System diagnostics active, sir."
     
-    base64_stream = generate_speech_base64_sync(test_phrase)
+    speech_service = SpeechService()
+    base64_stream = speech_service.generate_speech_base64(test_phrase)
     
     assert base64_stream is not None, "Speech generation returned None."
     assert len(base64_stream) > 0, "Speech generation returned empty string."

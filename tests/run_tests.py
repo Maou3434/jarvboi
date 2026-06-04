@@ -7,6 +7,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import test_tts
 import test_desktop_agent
 import test_assistant
+import test_skills
+import test_db
 
 def print_stark_header():
     """Prints a high-fidelity Stark Industries diagnostic header in the console."""
@@ -22,7 +24,9 @@ def main():
     checks = [
         ("TTS & Premium Speech Synthesis Module", test_tts.run_all),
         ("OS Automation & Viewport Grids Module", test_desktop_agent.run_all),
-        ("Jarvis Prompt Coordination & LLM Parsers", test_assistant.run_all)
+        ("Jarvis Prompt Coordination & LLM Parsers", test_assistant.run_all),
+        ("Jarvis Automatic Skill Writer & Registry Module", test_skills.run_all),
+        ("Jarvis Relational SQLite Database Storage Module", test_db.run_all)
     ]
     
     failures = []

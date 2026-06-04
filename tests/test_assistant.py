@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.assistant import Assistant
 from tools.registry import registry
-from core.llm import OllamaLLM
+from services.llm_service import OllamaLLM
 
 def test_prompt_tool_embedding():
     """Verifies that the registered desktop tools are dynamically embedded in the system prompt."""
