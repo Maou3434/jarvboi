@@ -44,9 +44,14 @@ class Settings:
     # Speech-to-Text configurations
     STT_BACKEND: str = os.getenv("STT_BACKEND", "whisper")  # 'whisper' or 'google'
     WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "tiny.en")  # e.g. tiny.en, base.en, tiny, base
+    STT_LANGUAGE: str = os.getenv("STT_LANGUAGE", "en-US")  # e.g. en-IN, en-US, en-GB
     
     # Browser automation configurations
     BROWSER_HEADLESS: bool = os.getenv("BROWSER_HEADLESS", "False").lower() in ("true", "1", "yes")
     BROWSER_TIMEOUT: int = int(os.getenv("BROWSER_TIMEOUT", "15000"))
     BROWSER_CONNECT_CDP: bool = os.getenv("BROWSER_CONNECT_CDP", "False").lower() in ("true", "1", "yes")
     BROWSER_CDP_URL: str = os.getenv("BROWSER_CDP_URL", "http://127.0.0.1:9222")
+    
+    # Database configurations
+    USE_SQLITE: bool = os.getenv("USE_SQLITE", "False").lower() in ("true", "1", "yes")
+    DATABASE_PATH: str = os.getenv("DATABASE_PATH", "scratch/jarvboi.db")

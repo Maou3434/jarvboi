@@ -8,6 +8,7 @@ const aiOrb = document.getElementById('ai-orb');
 const orbStatusText = document.getElementById('orb-status-text');
 
 let socket;
+let activeAudio = null;
 
 function connectWebSocket() {
   // Using localhost:8000 for the FastAPI server
@@ -64,9 +65,21 @@ function handleIncomingData(data) {
   } else if (type === 'tool_end') {
     appendLog('TOOL RESULT', `Tool ${data.tool_name} finished.`, 'tool-end');
   } else if (type === 'speak') {
+    if (activeAudio) {
+      activeAudio.pause();
+    }
     appendLog('SPEAK', 'Streaming vocal response, sir.', 'speak-audio');
-    const audio = new Audio("data:audio/mp3;base64," + data.audio);
-    audio.play().catch(e => console.error('[Audio] Playback failed:', e));
+    activeAudio = new Audio("data:audio/mp3;base64," + data.audio);
+    activeAudio.play().catch(e => console.error('[Audio] Playback failed:', e));
+    activeAudio.onended = () => {
+      activeAudio = null;
+    };
+  } else if (type === 'stop_audio') {
+    appendLog('SYSTEM', 'Voice playback interrupted.', 'system');
+    if (activeAudio) {
+      activeAudio.pause();
+      activeAudio = null;
+    }
   } else if (type === 'final_response') {
     appendChatMessage('JARVBOI', data.response, 'assistant');
     setOrbState('idle');
@@ -120,10 +133,38 @@ function appendLog(tag, text, cssClass) {
   diagnosticLog.scrollTop = diagnosticLog.scrollHeight;
 }
 
+function triggerInterruption() {
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio = null;
+  }
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'interrupt' }));
+    appendLog('SYSTEM', 'Interruption command transmitted.', 'system');
+  }
+}
+
+aiOrb.addEventListener('click', () => {
+  if (aiOrb.classList.contains('speaking') || aiOrb.classList.contains('processing')) {
+    triggerInterruption();
+  }
+});
+
+chatInput.addEventListener('input', () => {
+  if (activeAudio) {
+    triggerInterruption();
+  }
+});
+
 chatForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = chatInput.value.trim();
   if (!text) return;
+  
+  if (activeAudio) {
+    activeAudio.pause();
+    activeAudio = null;
+  }
   
   if (socket && socket.readyState === WebSocket.OPEN) {
     appendChatMessage('USER', text, 'user');

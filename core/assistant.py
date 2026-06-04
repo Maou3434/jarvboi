@@ -1,8 +1,6 @@
 import json
-from typing import Generator
-from core.llm import OllamaLLM, GeminiLLM
-from core.memory import ConversationMemory
-from tools.registry import registry, ToolRegistry
+from typing import Generator, List, Dict, Any, Optional
+from core.state import AssistantState
 from config.settings import Settings
 from utils.logger import logger
 
@@ -10,7 +8,6 @@ def check_ollama_running() -> bool:
     """Checks if the local Ollama server is running and responsive."""
     try:
         import urllib.request
-        # Settings.OLLAMA_HOST is typically "http://localhost:11434"
         with urllib.request.urlopen(Settings.OLLAMA_HOST, timeout=1.5) as conn:
             if conn.status in (200, 404):
                 return True
@@ -20,38 +17,73 @@ def check_ollama_running() -> bool:
             return True
     return False
 
+
 class Assistant:
-    """The core coordinator of the Jarvboi assistant."""
+    """The core coordinator of the Jarvboi assistant, refactored to support
+    dependency injection, explicit state machine transitions, and event-driven orchestration.
+    """
     
-    def __init__(self, memory: ConversationMemory = None, llm=None, tool_registry: ToolRegistry = None):
-        self.memory = memory or ConversationMemory()
+    def __init__(
+        self,
+        event_bus: Optional[Any] = None,
+        llm_service: Optional[Any] = None,
+        memory_service: Optional[Any] = None,
+        speech_service: Optional[Any] = None,
+        tool_registry: Optional[Any] = None,
+        skill_service: Optional[Any] = None
+    ):
+        # Lazy imports to prevent circular dependencies at startup
+        from services.event_bus import EventBus
+        from services.llm_service import LLMService
+        from services.memory_service import MemoryService
+        from services.speech_service import SpeechService
+        from services.skill_service import SkillService
+        from tools.registry import registry
+        
+        self.event_bus = event_bus or EventBus()
+        self.llm_service = llm_service or LLMService()
+        self.memory_service = memory_service or MemoryService(event_bus=self.event_bus)
+        self.speech_service = speech_service or SpeechService(event_bus=self.event_bus)
         self.registry = tool_registry or registry
+        self.skill_service = skill_service or SkillService(event_bus=self.event_bus)
+        
+        self.state = AssistantState.IDLE
         self.preferred_provider = Settings.LLM_PROVIDER
         self.awaiting_ollama_start = False
         self.awaiting_gemini_switch = False
+        self.awaiting_skill_save = False
+        self.pending_skill_data = {}
         self.has_gemini = bool(Settings.GEMINI_API_KEY)
+        self.interrupted = False
         
-        # Dynamically select LLM wrapper based on configurations
-        if llm:
-            self.llm = llm
-        else:
-            if self.preferred_provider == "gemini":
-                if self.has_gemini:
-                    logger.info("Initializing Gemini 2.5 Flash API as primary LLM provider...")
-                    self.llm = GeminiLLM()
-                else:
-                    logger.warning("Gemini was selected as provider, but GEMINI_API_KEY is not configured. Falling back to local Ollama...")
-                    self.llm = OllamaLLM()
-            else:
-                logger.info("Initializing local Ollama as LLM provider...")
-                self.llm = OllamaLLM()
+        # Subscribe to Event Bus interruption triggers
+        self.event_bus.subscribe("interrupt", self._on_interrupt)
         
+    def _on_interrupt(self, data=None):
+        logger.info("[Assistant] Interrupt event caught on bus. Setting interruption state.")
+        self.interrupted = True
+        self.set_state(AssistantState.INTERRUPTED)
+        
+    @property
+    def memory(self):
+        """Backward-compatibility property delegating to memory_service."""
+        return self.memory_service
+        
+    def set_state(self, new_state: AssistantState):
+        """Sets assistant state and publishes state_changed event on the Event Bus."""
+        logger.info(f"[Assistant] State transitioning: {self.state.name} -> {new_state.name}")
+        self.state = new_state
+        self.event_bus.publish("state_changed", new_state)
+
     def execute(self, user_message: str, max_turns: int = 3) -> Generator[dict, None, None]:
         """Processes a user message, executing tools dynamically and yielding step details.
         
         Yields:
-            Dict containing step information (type, thought, tool_name, result, response).
+            Dict containing step information.
         """
+        # Reset interruption state on new query execution
+        self.interrupted = False
+        
         clean_msg = user_message.lower().strip().replace(".", "").replace(",", "")
         affirmative_words = {"yes", "yeah", "yup", "ok", "okay", "sure", "please", "do it", "confirm", "go ahead", "y", "correct", "affirmative"}
         is_affirmative = any(w in affirmative_words for w in clean_msg.split()) or clean_msg in affirmative_words
@@ -60,7 +92,7 @@ class Assistant:
         if self.awaiting_gemini_switch:
             self.awaiting_gemini_switch = False
             if is_affirmative:
-                self.llm = GeminiLLM()
+                self.llm_service.switch_to_gemini()
                 self.preferred_provider = "gemini"
                 yield {
                     "type": "thought",
@@ -116,7 +148,7 @@ class Assistant:
                 # Re-verify connection
                 if check_ollama_running():
                     logger.info("[Ollama Manager] Ollama is now running.")
-                    self.llm = OllamaLLM()
+                    self.llm_service.switch_to_ollama()
                     yield {
                         "type": "final_response",
                         "response": "The Ollama service is now online in WSL and ready for use, sir. How can I assist you?"
@@ -154,6 +186,53 @@ class Assistant:
                         "response": "Understood, sir. I will wait until the Ollama service becomes available."
                     }
             return
+
+        # Handle active wait state for creating/saving custom skills
+        if self.awaiting_skill_save:
+            self.awaiting_skill_save = False
+            skill_info = self.pending_skill_data
+            self.pending_skill_data = {}
+            
+            if is_affirmative:
+                self.set_state(AssistantState.THINKING)
+                yield {
+                    "type": "thought",
+                    "thought": f"User confirmed skill creation. Writing skill files for '{skill_info.get('name')}' to disk...",
+                    "tool_name": None,
+                    "tool_args": {}
+                }
+                
+                success = self.skill_service.create_skill(
+                    name=skill_info.get("name"),
+                    description=skill_info.get("description"),
+                    parameters=skill_info.get("parameters"),
+                    python_code=skill_info.get("python_code"),
+                    markdown_content=skill_info.get("markdown_content")
+                )
+                
+                if success:
+                    response_msg = f"Certainly, sir. I have saved and loaded the skill '{skill_info.get('name')}'. It is now part of my permanent capabilities."
+                else:
+                    response_msg = f"I apologize, sir. I encountered an error while writing the python tool files for the skill '{skill_info.get('name')}'."
+                    
+                self.event_bus.publish("assistant_response", {"response": response_msg})
+                yield {
+                    "type": "final_response",
+                    "response": response_msg
+                }
+            else:
+                yield {
+                    "type": "thought",
+                    "thought": "User declined saving the proposed skill.",
+                    "tool_name": None,
+                    "tool_args": {}
+                }
+                yield {
+                    "type": "final_response",
+                    "response": "Understood, sir. I will not save this workflow as a skill."
+                }
+            self.set_state(AssistantState.IDLE)
+            return
                 
         # Intercept if local Ollama is preferred but currently offline
         if self.preferred_provider == "ollama" and not check_ollama_running():
@@ -170,23 +249,50 @@ class Assistant:
             }
             return
 
-        # 1. Add user message to conversation memory
-        self.memory.add_message("user", user_message)
+        # Start thinking
+        self.set_state(AssistantState.THINKING)
+        
+        # Track tools executed in this session
+        executed_tools = []
+        
+        # Retrieve relevant past vector memories
+        relevant_memories = []
+        try:
+            relevant_memories = self.memory_service.retrieve_long_term_context(user_message, top_k=3)
+            if relevant_memories:
+                logger.info(f"[Assistant] Injected {len(relevant_memories)} vector context strings.")
+        except Exception as e:
+            logger.error(f"[Assistant] Error retrieving long-term context: {e}")
+
+        # Add user message to conversation memory
+        self.memory_service.add_short_term_message("user", user_message)
         
         for turn in range(max_turns):
+            if self.interrupted:
+                logger.info("[Assistant] Interruption detected. Aborting execution loop.")
+                yield {
+                    "type": "final_response",
+                    "response": "[Interrupted]"
+                }
+                self.set_state(AssistantState.IDLE)
+                return
+
             logger.debug(f"Starting execution turn {turn + 1}/{max_turns}")
             
-            # 2. Formulate dynamic system prompt and prepare full message history
-            system_prompt = self._get_system_prompt()
-            messages = [{"role": "system", "content": system_prompt}] + self.memory.get_history()
+            # Formulate dynamic system prompt and prepare full message history
+            system_prompt = self._get_system_prompt(relevant_memories, user_message)
+            messages = [{"role": "system", "content": system_prompt}] + self.memory_service.get_short_term_history()
             
-            # 3. Query LLM
-            response = self.llm.chat(messages)
+            # Query LLM Service
+            response = self.llm_service.chat(messages)
             thought = response.get("thought", "")
             tool_name = response.get("tool_name")
             if tool_name in (None, "", "null", "None"):
                 tool_name = None
             tool_args = response.get("tool_args", {})
+            
+            # Publish thought on the event bus
+            self.event_bus.publish("assistant_thought", {"thought": thought})
             
             yield {
                 "type": "thought",
@@ -195,27 +301,35 @@ class Assistant:
                 "tool_args": tool_args
             }
             
-            # 4. Handle Tool Calls
+            # Handle Tool Calls
             if tool_name:
+                self.set_state(AssistantState.TOOL_RUNNING)
                 tool = self.registry.get_tool(tool_name)
                 if tool:
                     logger.info(f"Executing tool '{tool_name}' with args: {tool_args}")
+                    self.event_bus.publish("tool_start", {"tool_name": tool_name, "tool_args": tool_args})
                     yield {
                         "type": "tool_start",
                         "tool_name": tool_name,
                         "tool_args": tool_args
                     }
                     
-                    # Add the assistant's pre-tool thought to memory so the LLM remembers what it said/did
                     if thought:
-                        self.memory.add_message("assistant", thought)
+                        self.memory_service.add_short_term_message("assistant", thought)
                         
                     # Execute tool
                     result = tool.execute(**tool_args)
-                    logger.info(f"Tool '{tool_name}' execution result: {result}")
+                    logger.info(f"Tool '{tool_name}' result: {result}")
                     
-                    # Add execution result to memory
-                    self.memory.add_tool_result(tool_name, result)
+                    # Record execution trace
+                    executed_tools.append({
+                        "tool_name": tool_name,
+                        "tool_args": tool_args,
+                        "result": result
+                    })
+                    
+                    self.memory_service.add_short_term_tool_result(tool_name, result)
+                    self.event_bus.publish("tool_end", {"tool_name": tool_name, "result": result})
                     
                     yield {
                         "type": "tool_end",
@@ -223,47 +337,167 @@ class Assistant:
                         "result": result
                     }
                     
-                    # Continue loop to let model formulate final response based on tool result
+                    # Transition state back to thinking for the next turn
+                    self.set_state(AssistantState.THINKING)
                     continue
                 else:
                     error_msg = f"Tool '{tool_name}' is not registered."
                     logger.warning(error_msg)
                     if thought:
-                        self.memory.add_message("assistant", thought)
-                    self.memory.add_tool_result(tool_name, error_msg)
+                        self.memory_service.add_short_term_message("assistant", thought)
+                    self.memory_service.add_short_term_tool_result(tool_name, error_msg)
                     
                     yield {
                         "type": "tool_end",
                         "tool_name": tool_name,
                         "result": error_msg
                     }
+                    self.set_state(AssistantState.THINKING)
                     continue
             
-            # 5. Direct Conversational Response (No tool call)
-            # Add LLM response to memory and complete flow
-            response_text = response.get("response", thought) # Fallback to thought if response is missing
-            self.memory.add_message("assistant", response_text)
+            # Direct Conversational Response (No tool call)
+            response_text = response.get("response", thought)
+            self.memory_service.add_short_term_message("assistant", response_text)
+            
+            # Publish memory write event to the Event Bus asynchronously
+            self.event_bus.publish("save_memory", {
+                "user_message": user_message,
+                "response_text": response_text
+            })
+            
+            self.event_bus.publish("assistant_response", {"response": response_text})
+            
+            # Check if this successful execution qualifies for a skill save
+            clean_user_msg = user_message.lower()
+            wants_skill_save = any(keyword in clean_user_msg for keyword in [
+                "learn this skill", "save this skill", "save this workflow", 
+                "learn a new skill", "save as a skill", "remember this workflow"
+            ])
+            
+            if (wants_skill_save or len(executed_tools) >= 2) and not self.awaiting_skill_save:
+                # Generate proposal in background / synchronous context
+                proposal = self._generate_skill_proposal(user_message, executed_tools)
+                if proposal:
+                    self.awaiting_skill_save = True
+                    self.pending_skill_data = proposal
+                    self.set_state(AssistantState.AWAITING_SKILL_SAVE)
+                    
+                    yield {
+                        "type": "thought",
+                        "thought": f"Workflow complete. Proposing to save as skill: '{proposal['name']}'",
+                        "tool_name": None,
+                        "tool_args": {}
+                    }
+                    
+                    response_text = f"Sir, I have completed this workflow successfully. Would you like me to save this as a permanent skill named '{proposal['name']}'?"
+                    self.event_bus.publish("assistant_response", {"response": response_text})
+                    
+                    yield {
+                        "type": "final_response",
+                        "response": response_text
+                    }
+                    return
+
             yield {
                 "type": "final_response",
                 "response": response_text
             }
             break
         else:
-            # Reached max turns without a final response
             logger.warning("Reached maximum turn execution depth without final response.")
             yield {
                 "type": "final_response",
                 "response": "I executed my tools, but I reached my turn limit before finishing the response."
             }
             
-    def _get_system_prompt(self) -> str:
-        """Generates a dynamic system prompt embedded with the current tool schemas."""
+        self.set_state(AssistantState.IDLE)
+
+    def _generate_skill_proposal(self, user_message: str, executed_tools: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Queries the LLM to package the successful workflow into a reusable skill definition."""
+        logger.info("[Assistant] Proposing to save successful workflow as a skill.")
+        import re
+        
+        # Construct history of steps
+        steps_desc = ""
+        for i, step in enumerate(executed_tools):
+            steps_desc += f"Step {i+1}: Tool '{step['tool_name']}' was called with args: {json.dumps(step['tool_args'])}\nResult: {step['result']}\n\n"
+            
+        prompt = f"""You are analyzing a successful execution trace of the Jarvis assistant.
+Your goal is to synthesize this sequence of actions into a reusable personal assistant skill.
+
+Original User Intent: "{user_message}"
+
+Executed Workflow Steps:
+{steps_desc}
+
+Provide a reusable python function that orchestrates this exact sequence of actions. It must be decorated with `@register_tool` from `tools.registry`.
+Also provide the content for a `SKILL.md` markdown file describing how to use this skill, including any parameters.
+
+You MUST respond ONLY with a single JSON object conforming exactly to this schema:
+{{
+  "skill_name": "reusable_snake_case_name",
+  "description": "Short description of what the skill/tool accomplishes.",
+  "parameters": {{
+    "type": "object",
+    "properties": {{
+       "optional_arg": {{"type": "string", "description": "..."}}
+    }},
+    "required": []
+  }},
+  "python_code": "import time\\nfrom tools.registry import register_tool\\nfrom automation import get_browser_agent\\n\\n@register_tool(\\n    name='reusable_snake_case_name',\\n    description='...',\\n    parameters=...\\n)\\ndef reusable_snake_case_name(**kwargs) -> str:\\n    # write code to execute steps\\n    return 'Success message'",
+  "markdown_content": "# Reusable Skill\\nDetailed markdown documentation explaining when to use this skill, parameters, and its internal steps."
+}}
+
+Ensure the python code is syntactically valid and handles inputs safely. If no python code is needed (e.g. it is just an instructional/prompt skill), set "python_code" to null or empty string.
+"""
+        try:
+            messages = [
+                {"role": "system", "content": "You are a helpful programming assistant that packages successful automation workflows into structured JSON schemas."},
+                {"role": "user", "content": prompt}
+            ]
+            response = self.llm_service.chat(messages)
+            name = response.get("skill_name") or response.get("name")
+            if name:
+                name = re.sub(r'[^\w]', '_', name.lower().strip())
+                python_code = response.get("python_code")
+                if python_code and "register_tool" not in python_code:
+                    python_code = "from tools.registry import register_tool\n" + python_code
+                    
+                return {
+                    "name": name,
+                    "description": response.get("description", "Dynamic workflow skill."),
+                    "parameters": response.get("parameters", {"type": "object", "properties": {}, "required": []}),
+                    "python_code": python_code,
+                    "markdown_content": response.get("markdown_content", f"# {name}\nCustom dynamic skill.")
+                }
+        except Exception as e:
+            logger.error(f"[Assistant] Failed to generate skill proposal: {e}")
+        return None
+            
+    def _get_system_prompt(self, relevant_memories: List[str] = None, user_message: str = "") -> str:
+        """Generates a dynamic system prompt embedded with the current tool schemas and matching skills."""
         tools_list = self.registry.list_tools()
         tools_formatted = json.dumps(tools_list, indent=2)
         
+        memory_context = ""
+        if relevant_memories:
+            memory_context = "\n\nRELEVANT PAST CONVERSATIONS/CONTEXT:\n" + "\n---\n".join(relevant_memories) + "\n(Use this context to remember facts from past sessions/conversations with the user.)\n"
+            
+        skills_context = ""
+        if user_message:
+            try:
+                relevant_skills = self.skill_service.retrieve_relevant_skills(user_message, top_k=2)
+                if relevant_skills:
+                    skills_context = "\n\nRELEVANT SKILLS & PROCEDURAL INSTRUCTIONS:\n"
+                    for skill in relevant_skills:
+                        skills_context += f"--- SKILL: {skill['name']} ---\nDescription: {skill['description']}\n{skill['body']}\n"
+                    skills_context += "(Use these dynamic skill instructions to guide your response or tool orchestration. If a skill defines an associated custom python tool, you can call it just like a regular tool.)\n"
+            except Exception as e:
+                logger.error(f"[Assistant] Error retrieving relevant skills for prompt context: {e}")
+        
         return f"""You are Jarvboi, a highly capable modular personal AI assistant running natively on the user's Windows computer.
 You act as JARVIS: a polite, highly capable, and respectful digital butler. Always address the user respectfully (e.g. as "sir" or similar polite butler-like dialogue).
-You can control the user's laptop using the provided python automation tools.
+You can control the user's laptop using the provided python automation tools.{memory_context}{skills_context}
 
 CRITICAL GUIDELINES FOR DESKTOP AUTOMATION & SCREEN AWARENESS:
 1. Routing Philosophy: Choose the fastest and most efficient tool for the job.
