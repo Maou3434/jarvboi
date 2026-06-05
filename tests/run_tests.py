@@ -10,6 +10,12 @@ import test_assistant
 import test_skills
 import test_db
 import test_memory_v2
+import test_speech_service
+import test_tools_execution
+import test_assistant_interactive
+import test_interruption_event
+import test_api_endpoints
+import test_memory_service
 
 def print_stark_header():
     """Prints a high-fidelity Stark Industries diagnostic header in the console."""
@@ -28,7 +34,13 @@ def main():
         ("Jarvis Prompt Coordination & LLM Parsers", test_assistant.run_all),
         ("Jarvis Automatic Skill Writer & Registry Module", test_skills.run_all),
         ("Jarvis Relational SQLite Database Storage Module", test_db.run_all),
-        ("Jarvis Obsidian Hybrid Memory System Module", test_memory_v2.run_all)
+        ("Jarvis Obsidian Hybrid Memory System Module", test_memory_v2.run_all),
+        ("Jarvis Speech Service (Calibrate, STT, neural TTS)", test_speech_service.run_all),
+        ("Jarvis Tools Execution (shortcut, focus, coordinate mouse, Playwright, media keys)", test_tools_execution.run_all),
+        ("Jarvis Assistant Multi-turn Interactive Loop (Ollama check, Gemini fallback)", test_assistant_interactive.run_all),
+        ("Jarvis EventBus Interruption Triggering Module", test_interruption_event.run_all),
+        ("Jarvis FastAPI HTTP & WebSockets Endpoints Module", test_api_endpoints.run_all),
+        ("Jarvis Consolidated Memory Service Module", test_memory_service.run_all)
     ]
     
     failures = []
